@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Dashboard — Intelligence Contacts</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🕵️</text></svg>">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-inner">
+            <span class="nav-title">🕵️ CRM Dashboard</span>
+            <span class="nav-subtitle">Intelligence &amp; Security Contacts</span>
+            <span class="nav-count" id="navCount">—</span>
+        </div>
+    </nav>
+
+    <main class="main">
+        <!-- Stats Cards -->
+        <section class="stats" id="statsSection">
+            <div class="stat-card stat-total"><div class="stat-value" id="statTotal">—</div><div class="stat-label">Total Contacts</div></div>
+            <div class="stat-card stat-email"><div class="stat-value" id="statEmail">—</div><div class="stat-label">With Email</div></div>
+            <div class="stat-card stat-phone"><div class="stat-value" id="statPhone">—</div><div class="stat-label">With Phone</div></div>
+            <div class="stat-card stat-web"><div class="stat-value" id="statWeb">—</div><div class="stat-label">With Website</div></div>
+            <div class="stat-card stat-social"><div class="stat-value" id="statSocial">—</div><div class="stat-label">With Social</div></div>
+        </section>
+
+        <!-- Charts Row -->
+        <section class="charts" id="chartsSection">
+            <div class="chart-card">
+                <div class="chart-title">Verticals</div>
+                <div class="chart-bars" id="chartVerticals"></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">Types</div>
+                <div class="chart-bars" id="chartTypes"></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">Sources</div>
+                <div class="chart-bars" id="chartSources"></div>
+            </div>
+        </section>
+
+        <!-- Search & Filters -->
+        <section class="controls">
+            <div class="search-row">
+                <input type="text" id="searchInput" placeholder="Search by company, email, phone, website, or notes..." class="search-input">
+                <button id="searchBtn" class="btn btn-primary">🔍 Search</button>
+                <button id="clearBtn" class="btn btn-secondary">✕ Clear</button>
+            </div>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>Vertical</label>
+                    <select id="filterVertical"><option value="">All Verticals</option></select>
+                </div>
+                <div class="filter-group">
+                    <label>Type</label>
+                    <select id="filterType"><option value="">All Types</option></select>
+                </div>
+                <div class="filter-group">
+                    <label>Source</label>
+                    <select id="filterSource"><option value="">All Sources</option></select>
+                </div>
+                <div class="filter-group">
+                    <label>Per page</label>
+                    <select id="perPageSelect">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="250">250</option>
+                    </select>
+                </div>
+            </div>
+            <div class="result-count" id="resultCount"></div>
+        </section>
+
+        <!-- Table -->
+        <section class="table-section">
+            <div class="table-wrapper">
+                <table class="table" id="contactsTable">
+                    <thead>
+                        <tr>
+                            <th class="th-checkbox"><input type="checkbox" id="selectAllCheck" onchange="toggleSelectAll(this.checked)" title="Select all on this page"></th>
+                            <th data-sort="company">Company ↕</th>
+                            <th data-sort="type">Type ↕</th>
+                            <th data-sort="vertical">Vertical ↕</th>
+                            <th>Social</th>
+                            <th data-sort="phone">Phone ↕</th>
+                            <th data-sort="email">Email ↕</th>
+                            <th data-sort="source">Source ↕</th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="contactsBody">
+                        <tr><td colspan="9" class="loading-cell">Loading contacts...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Bulk Action Bar -->
+        <div class="bulk-bar" id="bulkBar" style="display:none">
+            <span class="bulk-count" id="bulkCount">0 selected</span>
+            <span class="bulk-email-count" id="bulkEmailCount"></span>
+            <button class="btn btn-primary" onclick="showBulkCompose()">📧 Email Selected</button>
+            <button class="btn btn-secondary" onclick="clearSelection()">✕ Clear</button>
+        </div>
+
+        <!-- Pagination -->
+        <section class="pagination" id="pagination"></section>
+    </main>
+
+    <!-- Bulk Compose Modal -->
+    <div class="modal-overlay" id="bulkModal">
+        <div class="modal modal-bulk">
+            <div class="modal-header">
+                <h2>📧 Bulk Email</h2>
+                <button class="modal-close" onclick="hideBulkCompose()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="bulk-info" id="bulkComposeCount"></div>
+                <div class="compose-field">
+                    <label>Subject</label>
+                    <input type="text" id="bulkSubject" class="compose-input" placeholder="Email subject...">
+                </div>
+                <div class="compose-field">
+                    <label>Message</label>
+                    <textarea id="bulkBody" class="compose-textarea" rows="8" placeholder="Write your message..."></textarea>
+                </div>
+                <div class="compose-actions">
+                    <button class="btn btn-primary" id="bulkSendBtn" onclick="sendBulkEmail()">📤 Send to All</button>
+                    <span class="compose-status" id="bulkStatus"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Detail Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="contactModal">
+            <div class="modal-header">
+                <h2 id="modalTitle">Contact Detail</h2>
+                <button class="modal-close" id="modalClose">✕</button>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <div class="loading-cell">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ─── State ──────────────────────────────────────────────────────
+    let selectedIds = new Set();
+    
+    let state = {
+        page: 1,
+        search: '',
+        vertical: '',
+        type: '',
+        source: '',
+        sort_by: 'company',
+        sort_dir: 'asc',
+        per_page: 50,
+        total: 0,
+        total_pages: 1,
+    };
+
+    // ─── DOM refs ───────────────────────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const searchInput = $('searchInput');
+    const searchBtn = $('searchBtn');
+    const clearBtn = $('clearBtn');
+    const filterVertical = $('filterVertical');
+    const filterType = $('filterType');
+    const filterSource = $('filterSource');
+    const perPageSelect = $('perPageSelect');
+    const contactsBody = $('contactsBody');
+    const resultCount = $('resultCount');
+    const pagination = $('pagination');
+    const modalOverlay = $('modalOverlay');
+    const contactModal = $('contactModal');
+    const modalTitle = $('modalTitle');
+    const modalBody = $('modalBody');
+    const modalClose = $('modalClose');
+
+    // ─── API calls ─────────────────────────────────────────────────
+    async function fetchJSON(url) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+    }
+
+    async function loadStats() {
+        const stats = await fetchJSON('/api/stats');
+        $('statTotal').textContent = stats.total.toLocaleString();
+        $('statEmail').textContent = stats.with_email.toLocaleString();
+        $('statPhone').textContent = stats.with_phone.toLocaleString();
+        $('statWeb').textContent = stats.with_website.toLocaleString();
+        $('statSocial').textContent = stats.with_social.toLocaleString();
+        $('navCount').textContent = `${stats.total.toLocaleString()} contacts`;
+        renderCharts(stats);
+    }
+
+    function renderCharts(stats) {
+        // Verticals
+        const maxVert = Math.max(...stats.by_vertical.map(v => v.count));
+        $('chartVerticals').innerHTML = stats.by_vertical.map(v =>
+            `<div class="bar-row"><span class="bar-label">${esc(v.name)}</span><div class="bar-track"><div class="bar-fill bar-fill-1" style="width:${(v.count/maxVert)*100}%"></div></div><span class="bar-count">${v.count}</span></div>`
+        ).join('');
+
+        // Types
+        const maxType = Math.max(...stats.by_type.map(t => t.count));
+        $('chartTypes').innerHTML = stats.by_type.map(t =>
+            `<div class="bar-row"><span class="bar-label">${esc(t.name)}</span><div class="bar-track"><div class="bar-fill bar-fill-2" style="width:${(t.count/maxType)*100}%"></div></div><span class="bar-count">${t.count}</span></div>`
+        ).join('');
+
+        // Sources
+        const maxSrc = Math.max(...stats.by_source.map(s => s.count));
+        $('chartSources').innerHTML = stats.by_source.map(s =>
+            `<div class="bar-row"><span class="bar-label">${esc(s.name)}</span><div class="bar-track"><div class="bar-fill bar-fill-3" style="width:${(s.count/maxSrc)*100}%"></div></div><span class="bar-count">${s.count}</span></div>`
+        ).join('');
+    }
+
+    async function loadFilters() {
+        const data = await fetchJSON('/api/filters');
+        data.verticals.forEach(v => {
+            filterVertical.innerHTML += `<option value="${esc(v)}">${esc(v)}</option>`;
+        });
+        data.types.forEach(t => {
+            filterType.innerHTML += `<option value="${esc(t)}">${esc(t)}</option>`;
+        });
+        data.sources.forEach(s => {
+            filterSource.innerHTML += `<option value="${esc(s)}">${esc(s)}</option>`;
+        });
+    }
+
+    async function loadContacts() {
+        const params = new URLSearchParams({
+            page: state.page,
+            per_page: state.per_page,
+            search: state.search,
+            vertical: state.vertical,
+            type: state.type,
+            source: state.source,
+            sort_by: state.sort_by,
+            sort_dir: state.sort_dir,
+        });
+        const data = await fetchJSON(`/api/contacts?${params}`);
+        state.total = data.total;
+        state.total_pages = data.total_pages;
+
+        resultCount.textContent = data.total === 0
+            ? 'No contacts found'
+            : `Showing ${((state.page-1)*state.per_page)+1}–${Math.min(state.page*state.per_page, data.total)} of ${data.total.toLocaleString()}`;
+
+        // Clear selections when page changes
+        selectedIds.clear();
+        document.getElementById('selectAllCheck').checked = false;
+        updateBulkBar();
+
+        if (data.contacts.length === 0) {
+            contactsBody.innerHTML = '<tr><td colspan="9" class="loading-cell">No contacts match your filters.</td></tr>';
+        } else {
+            contactsBody.innerHTML = data.contacts.map(c => {
+                const notes = c.notes || '';
+                const phone = c.phone || '';
+                const email = c.email || '';
+                const website = c.website || '';
+                const social = c.social || [];
+                const shortNotes = notes.length > 80 ? notes.slice(0, 80) + '...' : notes;
+                const checked = selectedIds.has(c.id) ? ' checked' : '';
+                return `<tr class="contact-row${checked ? ' row-selected' : ''}" data-id="${c.id}">
+                    <td class="cell-checkbox" onclick="event.stopPropagation()"><input type="checkbox" class="row-check" data-id="${c.id}" onchange="toggleRow('${c.id}', this.checked)"${checked}></td>
+                    <td class="cell-company" onclick="openDetail('${c.id}')"><strong>${esc(c.company)}</strong>${c.contact_name ? `<br><span class="contact-name">${esc(c.contact_name)}</span>` : ''}</td>
+                    <td><span class="badge badge-type">${esc(c.type || '-')}</span></td>
+                    <td><span class="badge badge-vertical">${esc(c.vertical || '-')}</span></td>
+                    <td class="cell-social">${renderSocialIcons(social)}</td>
+                    <td class="cell-phone">${phone ? esc(phone) : '<span class="dim">—</span>'}</td>
+                    <td class="cell-email">${email ? `<a href="mailto:${esc(email)}">${esc(email)}</a>` : '<span class="dim">—</span>'}</td>
+                    <td><span class="badge badge-source">${esc(c.source || '-')}</span></td>
+                    <td class="cell-notes">${shortNotes || '<span class="dim">—</span>'}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        renderPagination();
+    }
+
+    function renderPagination() {
+        const { page, total_pages } = state;
+        if (total_pages <= 1) {
+            pagination.innerHTML = '';
+            return;
+        }
+        let html = '';
+        const addPage = (p, label) => {
+            html += `<button class="page-btn${p === page ? ' active' : ''}" data-page="${p}">${label}</button>`;
+        };
+        addPage(1, '«');
+        if (page > 3) html += '<span class="page-ellipsis">…</span>';
+        for (let i = Math.max(2, page - 1); i <= Math.min(total_pages - 1, page + 1); i++) {
+            addPage(i, i);
+        }
+        if (page < total_pages - 2) html += '<span class="page-ellipsis">…</span>';
+        if (total_pages > 1) addPage(total_pages, '»');
+        pagination.innerHTML = html;
+
+        pagination.querySelectorAll('.page-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                state.page = parseInt(btn.dataset.page);
+                loadContacts();
+                document.querySelector('.table-section').scrollIntoView({ behavior: 'smooth' });
+            });
+        });
+    }
+
+    function esc(s) {
+        if (!s) return '';
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+    function escAttr(s) { return esc(s).replace(/'/g, '&#39;'); }
+    function renderSocialIcons(social) {
+        if (!social || social.length === 0) return '<span class="dim">—</span>';
+        return social.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" class="social-icon" title="${esc(s.platform)}: ${esc(s.handle)}">${esc(s.icon)}</a>`).join(' ');
+    }
+    function renderSocialLinks(social) {
+        if (!social || social.length === 0) return '<span class="dim">No social media listed</span>';
+        return social.map(s =>
+            `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" class="social-link" title="${esc(s.platform)}: ${esc(s.handle)}">${esc(s.icon)} <span>${esc(s.platform)}</span></a>`
+        ).join(' ');
+    }
+
+    // ─── Compose state ────────────────────────────────────────────
+    let composeContactId = '';
+    let composeEmail = '';
+
+    function showCompose(id, email, company) {
+        composeContactId = id;
+        composeEmail = email;
+        $('composeTo').textContent = `To: ${company} <${email}>`;
+        $('composeSubject').value = '';
+        $('composeBody').value = '';
+        $('composeStatus').textContent = '';
+        $('composeSection').style.display = 'block';
+        $('composeSubject').focus();
+    }
+
+    function hideCompose() {
+        $('composeSection').style.display = 'none';
+        $('composeStatus').textContent = '';
+    }
+
+    async function sendEmail() {
+        const subject = $('composeSubject').value.trim();
+        const body = $('composeBody').value.trim();
+        if (!subject) { $('composeStatus').textContent = '⚠️ Subject is required'; $('composeStatus').className = 'compose-status error'; return; }
+        if (!body) { $('composeStatus').textContent = '⚠️ Message body is required'; $('composeStatus').className = 'compose-status error'; return; }
+
+        const sendBtn = $('sendBtn');
+        sendBtn.disabled = true;
+        sendBtn.textContent = '⏳ Sending...';
+        $('composeStatus').textContent = 'Sending...';
+        $('composeStatus').className = 'compose-status';
+
+        try {
+            const res = await fetch('/api/send-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contact_id: composeContactId,
+                    email: composeEmail,
+                    subject: subject,
+                    body: body,
+                }),
+            });
+            const data = await res.json();
+            if (data.error) {
+                $('composeStatus').textContent = '❌ ' + data.error;
+                $('composeStatus').className = 'compose-status error';
+            } else {
+                $('composeStatus').textContent = '✅ Email sent to ' + data.to;
+                $('composeStatus').className = 'compose-status success';
+                setTimeout(hideCompose, 3000);
+            }
+        } catch (e) {
+            $('composeStatus').textContent = '❌ Network error: ' + e.message;
+            $('composeStatus').className = 'compose-status error';
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.textContent = '📤 Send';
+        }
+    }
+
+    // ─── Detail Modal ──────────────────────────────────────────────
+    async function openDetail(id) {
+        modalOverlay.classList.add('visible');
+        modalBody.innerHTML = '<div class="loading-cell">Loading...</div>';
+        try {
+            const c = await fetchJSON(`/api/contacts/${id}`);
+            modalTitle.textContent = c.company;
+            modalBody.innerHTML = `
+                <div class="detail-grid">
+                    <div class="detail-field"><span class="detail-label">Company</span><span class="detail-value">${esc(c.company)}</span></div>
+                    <div class="detail-field"><span class="detail-label">Contact</span><span class="detail-value">${esc(c.contact_name) || '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field"><span class="detail-label">Email</span><span class="detail-value">${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field"><span class="detail-label">Phone</span><span class="detail-value">${esc(c.phone) || '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field"><span class="detail-label">Website</span><span class="detail-value">${c.website ? `<a href="${esc(c.website)}" target="_blank" rel="noopener noreferrer">${esc(c.website)}</a>` : '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field"><span class="detail-label">Type</span><span class="detail-value"><span class="badge badge-type">${esc(c.type || '-')}</span></span></div>
+                    <div class="detail-field"><span class="detail-label">Vertical</span><span class="detail-value"><span class="badge badge-vertical">${esc(c.vertical || '-')}</span></span></div>
+                    <div class="detail-field"><span class="detail-label">Status</span><span class="detail-value"><span class="badge badge-source">${esc(c.status || '-')}</span></span></div>
+                    <div class="detail-field"><span class="detail-label">Source</span><span class="detail-value">${esc(c.source) || '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field"><span class="detail-label">Created</span><span class="detail-value">${esc(c.created_at) || '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field"><span class="detail-label">Updated</span><span class="detail-value">${esc(c.updated_at) || '<span class="dim">—</span>'}</span></div>
+                    <div class="detail-field detail-social"><span class="detail-label">Social Media</span><span class="detail-value social-links">${renderSocialLinks(c.social)}</span></div>
+                    <div class="detail-field detail-notes"><span class="detail-label">Notes</span><span class="detail-value notes-text">${esc(c.notes) || '<span class="dim">—</span>'}</span></div>
+                </div>
+                ${c.email ? `<div class="detail-actions">
+                    <button class="btn btn-primary" data-contact-id="${escAttr(c.id)}" data-contact-email="${escAttr(c.email)}" data-contact-company="${escAttr(c.company)}" onclick="showCompose(this.dataset.contactId, this.dataset.contactEmail, this.dataset.contactCompany)">📧 Send Email</button>
+                </div>` : ''}
+                <div class="compose-section" id="composeSection" style="display:none">
+                    <div class="compose-header">
+                        <span class="compose-to" id="composeTo"></span>
+                        <button class="btn-close-compose" onclick="hideCompose()">✕</button>
+                    </div>
+                    <div class="compose-field">
+                        <label>Subject</label>
+                        <input type="text" id="composeSubject" class="compose-input" placeholder="Email subject...">
+                    </div>
+                    <div class="compose-field">
+                        <label>Message</label>
+                        <textarea id="composeBody" class="compose-textarea" rows="6" placeholder="Write your message..."></textarea>
+                    </div>
+                    <div class="compose-actions">
+                        <button class="btn btn-primary" id="sendBtn" onclick="sendEmail()">📤 Send</button>
+                        <span class="compose-status" id="composeStatus"></span>
+                    </div>
+                </div>
+            `;
+        } catch (e) {
+            modalBody.innerHTML = `<div class="error">Error loading contact: ${e.message}</div>`;
+        }
+    }
+
+    modalClose.addEventListener('click', () => modalOverlay.classList.remove('visible'));
+    modalOverlay.addEventListener('click', (e) => {
+        if (e.target === modalOverlay) modalOverlay.classList.remove('visible');
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') modalOverlay.classList.remove('visible');
+    });
+
+    // ─── Table sorting ─────────────────────────────────────────────
+    document.querySelectorAll('th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+            const field = th.dataset.sort;
+            if (state.sort_by === field) {
+                state.sort_dir = state.sort_dir === 'asc' ? 'desc' : 'asc';
+            } else {
+                state.sort_by = field;
+                state.sort_dir = 'asc';
+            }
+            state.page = 1;
+            loadContacts();
+        });
+    });
+
+    // ─── Event handlers ────────────────────────────────────────────
+    function doSearch() {
+        state.search = searchInput.value;
+        state.page = 1;
+        loadContacts();
+    }
+
+    searchBtn.addEventListener('click', doSearch);
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') doSearch();
+    });
+
+    clearBtn.addEventListener('click', () => {
+        searchInput.value = '';
+        filterVertical.value = '';
+        filterType.value = '';
+        filterSource.value = '';
+        state.search = '';
+        state.vertical = '';
+        state.type = '';
+        state.source = '';
+        state.page = 1;
+        loadContacts();
+    });
+
+    filterVertical.addEventListener('change', () => {
+        state.vertical = filterVertical.value;
+        state.page = 1;
+        loadContacts();
+    });
+    filterType.addEventListener('change', () => {
+        state.type = filterType.value;
+        state.page = 1;
+        loadContacts();
+    });
+    filterSource.addEventListener('change', () => {
+        state.source = filterSource.value;
+        state.page = 1;
+        loadContacts();
+    });
+    perPageSelect.addEventListener('change', () => {
+        state.per_page = parseInt(perPageSelect.value);
+        state.page = 1;
+        loadContacts();
+    });
+
+    // ─── Bulk Selection ────────────────────────────────────────────
+    function toggleRow(id, checked) {
+        if (checked) selectedIds.add(id);
+        else selectedIds.delete(id);
+        updateBulkBar();
+        // Update row visual
+        const row = document.querySelector(`tr[data-id="${escAttr(id)}"]`);
+        if (row) row.classList.toggle('row-selected', checked);
+    }
+    
+    function toggleSelectAll(checked) {
+        document.querySelectorAll('.row-check').forEach(cb => {
+            cb.checked = checked;
+            const id = cb.dataset.id;
+            if (checked) selectedIds.add(id);
+            else selectedIds.delete(id);
+            const row = cb.closest('tr');
+            if (row) row.classList.toggle('row-selected', checked);
+        });
+        updateBulkBar();
+    }
+    
+    function updateBulkBar() {
+        const bar = document.getElementById('bulkBar');
+        const count = selectedIds.size;
+        if (count === 0) {
+            bar.style.display = 'none';
+            return;
+        }
+        bar.style.display = 'flex';
+        document.getElementById('bulkCount').textContent = `${count} selected`;
+        // Count how many have emails
+        const withEmail = Array.from(selectedIds).filter(id => {
+            const row = document.querySelector(`tr[data-id="${escAttr(id)}"]`);
+            if (!row) return false;
+            const emailCell = row.querySelector('.cell-email');
+            return emailCell && !emailCell.querySelector('.dim');
+        }).length;
+        document.getElementById('bulkEmailCount').textContent = `${withEmail} have email`;
+    }
+    
+    function clearSelection() {
+        selectedIds.clear();
+        document.querySelectorAll('.row-check').forEach(cb => cb.checked = false);
+        document.querySelectorAll('.row-selected').forEach(r => r.classList.remove('row-selected'));
+        document.getElementById('selectAllCheck').checked = false;
+        updateBulkBar();
+    }
+    
+    // ─── Bulk Compose ──────────────────────────────────────────────
+    function showBulkCompose() {
+        const withEmail = Array.from(selectedIds).filter(id => {
+            const row = document.querySelector(`tr[data-id="${escAttr(id)}"]`);
+            return row && !row.querySelector('.cell-email .dim');
+        });
+        document.getElementById('bulkComposeCount').textContent = `Sending to ${withEmail.length} contacts via BCC`;
+        document.getElementById('bulkSubject').value = '';
+        document.getElementById('bulkBody').value = '';
+        document.getElementById('bulkStatus').textContent = '';
+        document.getElementById('bulkModal').classList.add('visible');
+        document.getElementById('bulkSubject').focus();
+    }
+    
+    function hideBulkCompose() {
+        document.getElementById('bulkModal').classList.remove('visible');
+    }
+    
+    async function sendBulkEmail() {
+        const subject = document.getElementById('bulkSubject').value.trim();
+        const body = document.getElementById('bulkBody').value.trim();
+        if (!subject) { showBulkStatus('⚠️ Subject is required', true); return; }
+        if (!body) { showBulkStatus('⚠️ Message body is required', true); return; }
+        
+        // Gather emails from selected rows
+        const emails = [];
+        const names = [];
+        selectedIds.forEach(id => {
+            const row = document.querySelector(`tr[data-id="${escAttr(id)}"]`);
+            if (!row) return;
+            const emailCell = row.querySelector('.cell-email');
+            if (!emailCell || emailCell.querySelector('.dim')) return;
+            const link = emailCell.querySelector('a');
+            if (link && link.href.startsWith('mailto:')) {
+                emails.push(link.href.replace('mailto:', ''));
+                const companyCell = row.querySelector('.cell-company strong');
+                names.push(companyCell ? companyCell.textContent : 'Unknown');
+            }
+        });
+        
+        if (emails.length === 0) {
+            showBulkStatus('⚠️ No valid email addresses found in selection', true);
+            return;
+        }
+        
+        const sendBtn = document.getElementById('bulkSendBtn');
+        sendBtn.disabled = true;
+        sendBtn.textContent = '⏳ Sending...';
+        showBulkStatus(`Sending to ${emails.length} contacts...`, false);
+        
+        try {
+            const res = await fetch('/api/send-bulk-email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emails, subject, body }),
+            });
+            const data = await res.json();
+            if (data.error) {
+                showBulkStatus('❌ ' + data.error, true);
+            } else {
+                showBulkStatus(`✅ Email sent to ${data.sent} recipients`, false);
+                sendBtn.classList.add('btn-success-temp');
+                setTimeout(() => { hideBulkCompose(); sendBtn.classList.remove('btn-success-temp'); }, 2000);
+            }
+        } catch (e) {
+            showBulkStatus('❌ Network error: ' + e.message, true);
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.textContent = '📤 Send to All';
+        }
+    }
+    
+    function showBulkStatus(msg, isError) {
+        const el = document.getElementById('bulkStatus');
+        el.textContent = msg;
+        el.className = isError ? 'compose-status error' : 'compose-status success';
+    }
+
+    // ─── Init ──────────────────────────────────────────────────────
+    async function init() {
+        await Promise.all([loadStats(), loadFilters()]);
+        await loadContacts();
+    }
+
+    init();
+    </script>
+</body>
+</html>
