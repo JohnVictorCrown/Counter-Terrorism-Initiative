@@ -8,9 +8,15 @@ import os
 import re
 import smtplib
 import ssl
+import uuid
+import mimetypes
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.encoders import encode_base64
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify
+from datetime import datetime
 
 # ─── Social Media Parser ───────────────────────────────────────────
 SOCIAL_PLATFORMS = {
@@ -94,7 +100,7 @@ DB_PATH = Path(__file__).resolve().parent / "leads.db"
 MAIL_DB_PATH = Path(__file__).resolve().parent / "mail-credentials.db"
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 
-GMAIL_ADDRESS = "water.enterprises.org@gmail.com"
+GMAIL_ADDRESS = "john.victor.crown@gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
@@ -140,6 +146,26 @@ def get_db():
         db.close()
 
 
+def log_email(contact_id, email_to, subject, body_preview, status, error_msg=""):
+    """Log an email send to the outreach_log table."""
+    log_id = str(uuid.uuid4())
+    notes = f"To: {email_to} | Subject: {subject}"
+    if body_preview:
+        preview = body_preview[:80].replace('\n', ' ')
+        notes += f" | Body: {preview}..."
+    outcome = status
+    if error_msg:
+        outcome += f" | {error_msg[:100]}"
+    try:
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO outreach_log (id, lead_id, activity_type, notes, outcome) VALUES (?, ?, ?, ?, ?)",
+                (log_id, contact_id, "email", notes, outcome)
+            )
+    except Exception:
+        pass  # Don't fail the request if logging fails
+
+
 # ─── API Routes ──────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -168,6 +194,7 @@ def api_stats():
         with_phone = db.execute("SELECT COUNT(*) FROM leads WHERE phone IS NOT NULL AND phone != ''").fetchone()[0]
         with_website = db.execute("SELECT COUNT(*) FROM leads WHERE website IS NOT NULL AND website != ''").fetchone()[0]
         with_social = db.execute("SELECT COUNT(*) FROM leads WHERE notes LIKE '%Social:%'").fetchone()[0]
+        emails_sent = db.execute("SELECT COUNT(*) FROM outreach_log WHERE outcome LIKE 'sent%'").fetchone()[0]
     
     return jsonify({
         "total": total,
@@ -178,6 +205,7 @@ def api_stats():
         "with_phone": with_phone,
         "with_website": with_website,
         "with_social": with_social,
+        "emails_sent": emails_sent,
     })
 
 
@@ -277,10 +305,190 @@ def api_filters():
     return jsonify({"verticals": verticals, "types": types, "sources": sources})
 
 
+@app.route("/api/export-csv")
+def api_export_csv():
+    """Export filtered contacts as a CSV file download."""
+    search = request.args.get("search", "").strip()
+    vertical = request.args.get("vertical", "").strip()
+    contact_type = request.args.get("type", "").strip()
+    source_param = request.args.get("source", "").strip()
+    sort_by = request.args.get("sort_by", "company")
+    sort_dir = request.args.get("sort_dir", "asc")
+
+    allowed_sorts = ["company", "type", "vertical", "source", "phone", "email", "website", "status"]
+    if sort_by not in allowed_sorts:
+        sort_by = "company"
+    sort_dir_sql = "ASC" if sort_dir != "desc" else "DESC"
+
+    clauses = []
+    params = []
+    if search:
+        s = f"%{search}%"
+        clauses.append("(company LIKE ? OR email LIKE ? OR phone LIKE ? OR website LIKE ? OR notes LIKE ? OR contact_name LIKE ?)")
+        params.extend([s, s, s, s, s, s])
+    if vertical:
+        clauses.append("vertical = ?")
+        params.append(vertical)
+    if contact_type:
+        clauses.append("type = ?")
+        params.append(contact_type)
+    if source_param:
+        clauses.append("source = ?")
+        params.append(source_param)
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with get_db() as db:
+        rows = db.execute(
+            f"SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes, created_at, updated_at FROM leads {where} ORDER BY {sort_by} {sort_dir_sql}",
+            params
+        ).fetchall()
+
+    import csv, io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Company", "Contact Name", "Email", "Phone", "Website", "Type", "Vertical", "Source", "Status", "Notes", "Created At", "Updated At"])
+    for r in rows:
+        writer.writerow([r[k] for k in r.keys()])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    
+    filename_parts = []
+    if search:
+        filename_parts.append(search.replace(" ", "_"))
+    if vertical:
+        filename_parts.append(vertical.replace(" ", "_"))
+    if contact_type:
+        filename_parts.append(contact_type.replace(" ", "_"))
+    if source_param:
+        filename_parts.append(source_param.replace(" ", "_"))
+    filename = "contacts_" + ("_".join(filename_parts) if filename_parts else "all") + ".csv"
+
+    from flask import Response
+    return Response(
+        csv_bytes,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.route("/report")
+def report():
+    """Print-friendly report page for a region, agency, or search."""
+    search = request.args.get("search", "").strip()
+    vertical = request.args.get("vertical", "").strip()
+    contact_type = request.args.get("type", "").strip()
+    source_param = request.args.get("source", "").strip()
+
+    clauses = []
+    params = []
+    if search:
+        s = f"%{search}%"
+        clauses.append("(company LIKE ? OR email LIKE ? OR phone LIKE ? OR website LIKE ? OR notes LIKE ? OR contact_name LIKE ?)")
+        params.extend([s, s, s, s, s, s])
+    if vertical:
+        clauses.append("vertical = ?")
+        params.append(vertical)
+    if contact_type:
+        clauses.append("type = ?")
+        params.append(contact_type)
+    if source_param:
+        clauses.append("source = ?")
+        params.append(source_param)
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    order = "ORDER BY company ASC"
+    limit = 150  # Max contacts in a report
+
+    with get_db() as db:
+        rows = db.execute(
+            f"SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes FROM leads {where} {order} LIMIT ?",
+            params + [limit]
+        ).fetchall()
+
+        total_count = db.execute(f"SELECT COUNT(*) FROM leads {where}", params).fetchone()[0]
+
+        by_vertical_db = db.execute(
+            f"SELECT COALESCE(vertical, 'Unknown') as v, COUNT(*) as cnt FROM leads {where} GROUP BY v ORDER BY cnt DESC LIMIT 8",
+            params
+        ).fetchall()
+        by_type_db = db.execute(
+            f"SELECT COALESCE(type, 'Unknown') as t, COUNT(*) as cnt FROM leads {where} GROUP BY t ORDER BY cnt DESC LIMIT 8",
+            params
+        ).fetchall()
+        by_source_db = db.execute(
+            f"SELECT COALESCE(source, 'Unknown') as s, COUNT(*) as cnt FROM leads {where} GROUP BY s ORDER BY cnt DESC LIMIT 8",
+            params
+        ).fetchall()
+
+        if where:
+            with_email = db.execute(f"SELECT COUNT(*) FROM leads {where} AND email IS NOT NULL AND email != ''", params).fetchone()[0]
+            with_phone = db.execute(f"SELECT COUNT(*) FROM leads {where} AND phone IS NOT NULL AND phone != ''", params).fetchone()[0]
+            with_website = db.execute(f"SELECT COUNT(*) FROM leads {where} AND website IS NOT NULL AND website != ''", params).fetchone()[0]
+            with_social = db.execute(f"SELECT COUNT(*) FROM leads {where} AND notes LIKE '%Social:%'", params).fetchone()[0]
+        else:
+            with_email = db.execute("SELECT COUNT(*) FROM leads WHERE email IS NOT NULL AND email != ''").fetchone()[0]
+            with_phone = db.execute("SELECT COUNT(*) FROM leads WHERE phone IS NOT NULL AND phone != ''").fetchone()[0]
+            with_website = db.execute("SELECT COUNT(*) FROM leads WHERE website IS NOT NULL AND website != ''").fetchone()[0]
+            with_social = db.execute("SELECT COUNT(*) FROM leads WHERE notes LIKE '%Social:%'").fetchone()[0]
+
+    contacts = []
+    for r in rows:
+        c = {k: r[k] for k in r.keys()}
+        if c.get("notes") and len(c["notes"]) > 300:
+            c["notes"] = c["notes"][:300] + "..."
+        contacts.append(c)
+
+    max_count = 1
+    for items in [by_vertical_db, by_type_db, by_source_db]:
+        for item in items:
+            if item[1] > max_count:
+                max_count = item[1]
+
+    def build_chart_data(items):
+        result = []
+        for item in items:
+            result.append({
+                "name": item[0],
+                "count": item[1],
+                "pct": round(item[1] / max_count * 100, 1),
+            })
+        return result
+
+    title_parts = []
+    if search:
+        title_parts.append(f'Search: "{search}"')
+    if vertical:
+        title_parts.append(f"Vertical: {vertical}")
+    if contact_type:
+        title_parts.append(f"Type: {contact_type}")
+    if source_param:
+        title_parts.append(f"Source: {source_param}")
+    title = " — ".join(title_parts) if title_parts else "All Contacts"
+
+    now_str = datetime.now().strftime("%B %d, %Y at %H:%M")
+
+    return render_template(
+        "report.html",
+        title=title,
+        total_count=total_count,
+        with_email=with_email,
+        with_phone=with_phone,
+        with_website=with_website,
+        with_social=with_social,
+        by_vertical=build_chart_data(by_vertical_db),
+        by_type=build_chart_data(by_type_db),
+        by_source=build_chart_data(by_source_db),
+        contacts=contacts,
+        generated_at=now_str,
+    )
+
+
 @app.route("/api/send-email", methods=["POST"])
 def api_send_email():
     """Send an email to a contact via Gmail SMTP."""
-    data = request.get_json()
+    # Accept both JSON and form-data (for file attachments)
+    data = request.get_json() or request.form
     if not data:
         return jsonify({"error": "Request body required"}), 400
 
@@ -313,8 +521,43 @@ def api_send_email():
     if not password:
         return jsonify({"error": "Gmail app password not found. Run store-password.py first."}), 500
 
-    # Build and send the email
-    msg = MIMEText(body, "plain", "utf-8")
+    # Build the email — plain text or with attachment
+    file = request.files.get("file") if request.files else None
+    
+    if file and file.filename:
+        # Multipart email with attachment
+        msg = MIMEMultipart("mixed")
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        
+        # Read the file
+        file_data = file.read()
+        if not file_data:
+            return jsonify({"error": "Uploaded file is empty"}), 400
+        
+        # Limit file size (Gmail allows 25MB, we limit to 20MB)
+        max_bytes = 20 * 1024 * 1024
+        if len(file_data) > max_bytes:
+            return jsonify({"error": "File too large. Maximum size is 20MB."}), 400
+        
+        # Guess content type
+        content_type, encoding = mimetypes.guess_type(file.filename)
+        if content_type is None:
+            content_type = "application/octet-stream"
+        main_type, sub_type = content_type.split("/", 1)
+        
+        attachment = MIMEBase(main_type, sub_type)
+        attachment.set_payload(file_data)
+        encode_base64(attachment)
+        attachment.add_header(
+            "Content-Disposition",
+            "attachment",
+            filename=file.filename,
+        )
+        msg.attach(attachment)
+    else:
+        # Plain text email
+        msg = MIMEText(body, "plain", "utf-8")
+    
     msg["From"] = f"John Victor @ WaterParty <{GMAIL_ADDRESS}>"
     msg["To"] = to_email
     msg["Subject"] = subject
@@ -328,12 +571,82 @@ def api_send_email():
             server.login(GMAIL_ADDRESS, password)
             server.sendmail(GMAIL_ADDRESS, [to_email], msg.as_string())
 
-        return jsonify({"success": True, "to": to_email, "subject": subject})
+        attach_name = file.filename if (file and file.filename) else None
+        log_email(contact_id, to_email, subject, body, "sent")
+        return jsonify({
+            "success": True,
+            "to": to_email,
+            "subject": subject,
+            "attachment": attach_name,
+        })
 
     except smtplib.SMTPAuthenticationError:
         return jsonify({"error": "SMTP authentication failed. Gmail app password may need updating."}), 500
     except Exception as e:
         return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
+
+
+@app.route("/api/email-log")
+def api_email_log():
+    """Get email log for a specific contact or recent emails."""
+    contact_id = request.args.get("contact_id", "").strip()
+    limit = request.args.get("limit", 50, type=int)
+    
+    with get_db() as db:
+        if contact_id:
+            rows = db.execute(
+                "SELECT * FROM outreach_log WHERE lead_id = ? ORDER BY created_at DESC LIMIT ?",
+                (contact_id, limit)
+            ).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT o.*, l.company FROM outreach_log o LEFT JOIN leads l ON o.lead_id = l.id ORDER BY o.created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+    
+    logs = [{k: r[k] for k in r.keys()} for r in rows]
+    
+    # Also include total sent count in stats
+    with get_db() as db:
+        total_sent = db.execute("SELECT COUNT(*) FROM outreach_log WHERE outcome LIKE 'sent%'").fetchone()[0]
+    
+    return jsonify({"logs": logs, "total_sent": total_sent})
+
+
+@app.route("/api/export-selected-csv", methods=["POST"])
+def api_export_selected_csv():
+    """Export only the selected contacts (by IDs) as a CSV file download."""
+    data = request.get_json()
+    if not data or "ids" not in data or not data["ids"]:
+        return jsonify({"error": "No contact IDs provided"}), 400
+
+    ids = data["ids"]
+    if not isinstance(ids, list):
+        return jsonify({"error": "ids must be an array"}), 400
+
+    placeholders = ",".join(["?"] * len(ids))
+    with get_db() as db:
+        rows = db.execute(
+            f"SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes, created_at, updated_at FROM leads WHERE id IN ({placeholders}) ORDER BY company ASC",
+            ids
+        ).fetchall()
+
+    import csv, io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Company", "Contact Name", "Email", "Phone", "Website", "Type", "Vertical", "Source", "Status", "Notes", "Created At", "Updated At"])
+    for r in rows:
+        writer.writerow([r[k] for k in r.keys()])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    filename = f"contacts_selected_{len(ids)}.csv"
+
+    from flask import Response
+    return Response(
+        csv_bytes,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route("/api/send-bulk-email", methods=["POST"])
@@ -382,6 +695,9 @@ def api_send_bulk_email():
             server.login(GMAIL_ADDRESS, password)
             server.sendmail(GMAIL_ADDRESS, valid_emails, msg.as_string())
 
+        # Log each recipient
+        for email in valid_emails:
+            log_email("", email, subject, body, "sent")
         return jsonify({"success": True, "sent": len(valid_emails), "subject": subject})
 
     except smtplib.SMTPAuthenticationError:

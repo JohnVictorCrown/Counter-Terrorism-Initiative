@@ -86,7 +86,7 @@ a:hover { text-decoration: underline; }
 /* ─── Stats Cards ──────────────────────────────────────────────── */
 .stats {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 16px;
     margin-bottom: 20px;
 }
@@ -118,6 +118,7 @@ a:hover { text-decoration: underline; }
 .stat-phone .stat-value { color: var(--accent-orange); }
 .stat-web .stat-value { color: var(--accent-purple); }
 .stat-social .stat-value { color: var(--accent-pink); }
+.stat-emails-sent .stat-value { color: var(--accent-cyan); }
 
 /* ─── Charts ────────────────────────────────────────────────────── */
 .charts {
@@ -231,6 +232,24 @@ a:hover { text-decoration: underline; }
 .btn-secondary:hover {
     background: var(--border);
     color: var(--text-primary);
+}
+.btn-report {
+    background: var(--bg-tertiary);
+    color: var(--accent-purple);
+    border: 1px solid var(--accent-purple);
+}
+.btn-report:hover {
+    background: rgba(188, 140, 255, 0.15);
+    color: var(--accent-purple);
+}
+.btn-csv {
+    background: var(--bg-tertiary);
+    color: var(--accent-green);
+    border: 1px solid var(--accent-green);
+}
+.btn-csv:hover {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--accent-green);
 }
 
 .filter-row {
@@ -722,6 +741,165 @@ a:hover { text-decoration: underline; }
 }
 .bulk-bar .btn-secondary {
     margin-left: auto;
+}
+.btn-csv-selected {
+    background: var(--bg-tertiary);
+    color: var(--accent-green);
+    border: 1px solid var(--accent-green);
+}
+.btn-csv-selected:hover {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--accent-green);
+}
+
+/* ─── Email History ────────────────────────────────────────────── */
+.email-history {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+.history-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.history-count {
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+.history-empty {
+    font-size: 13px;
+    color: var(--text-dim);
+    padding: 8px 0;
+    font-style: italic;
+}
+.history-entry {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    border-left: 2px solid var(--border);
+    margin-left: 6px;
+    padding-left: 16px;
+    position: relative;
+}
+.history-entry:first-child {
+    padding-top: 0;
+}
+.history-entry:last-child {
+    border-left-color: transparent;
+    padding-bottom: 0;
+}
+.history-dot {
+    position: absolute;
+    left: -7px;
+    top: 11px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    border: 2px solid var(--bg-secondary);
+    flex-shrink: 0;
+}
+.dot-error {
+    background: var(--accent-red);
+}
+.history-content {
+    flex: 1;
+    min-width: 0;
+}
+.history-notes {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    word-break: break-word;
+    margin-bottom: 3px;
+}
+.history-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+}
+.history-status {
+    font-weight: 600;
+    font-size: 11px;
+}
+.status-ok { color: var(--accent-green); }
+.status-error { color: var(--accent-red); }
+.history-time {
+    color: var(--text-dim);
+    font-size: 11px;
+}
+
+/* ─── File Input ──────────────────────────────────────────────── */
+.file-size-hint {
+    font-weight: 400;
+    color: var(--text-dim);
+    text-transform: none;
+    letter-spacing: 0;
+}
+.file-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.file-input {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+.file-label {
+    display: inline-block;
+    padding: 7px 14px;
+    background: var(--bg-tertiary);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.file-label:hover {
+    background: var(--border);
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+}
+.file-name {
+    font-size: 12px;
+    color: var(--accent-blue);
+    font-weight: 600;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.file-clear {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 8px;
+    font-size: 12px;
+    transition: all 0.15s;
+}
+.file-clear:hover {
+    color: var(--accent-red);
+    border-color: var(--accent-red);
 }
 
 /* ─── Bulk Compose Modal ────────────────────────────────────────── */

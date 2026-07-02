@@ -24,6 +24,7 @@
             <div class="stat-card stat-phone"><div class="stat-value" id="statPhone">—</div><div class="stat-label">With Phone</div></div>
             <div class="stat-card stat-web"><div class="stat-value" id="statWeb">—</div><div class="stat-label">With Website</div></div>
             <div class="stat-card stat-social"><div class="stat-value" id="statSocial">—</div><div class="stat-label">With Social</div></div>
+            <div class="stat-card stat-emails-sent"><div class="stat-value" id="statEmailsSent">—</div><div class="stat-label">Emails Sent</div></div>
         </section>
 
         <!-- Charts Row -->
@@ -48,6 +49,8 @@
                 <input type="text" id="searchInput" placeholder="Search by company, email, phone, website, or notes..." class="search-input">
                 <button id="searchBtn" class="btn btn-primary">🔍 Search</button>
                 <button id="clearBtn" class="btn btn-secondary">✕ Clear</button>
+                <button id="reportBtn" class="btn btn-report" onclick="generateReport()">📄 Report</button>
+                <button id="csvBtn" class="btn btn-csv" onclick="exportCSV()">📥 CSV</button>
             </div>
             <div class="filter-row">
                 <div class="filter-group">
@@ -104,6 +107,7 @@
             <span class="bulk-count" id="bulkCount">0 selected</span>
             <span class="bulk-email-count" id="bulkEmailCount"></span>
             <button class="btn btn-primary" onclick="showBulkCompose()">📧 Email Selected</button>
+            <button class="btn btn-csv-selected" onclick="exportSelectedCSV()">📥 Export CSV</button>
             <button class="btn btn-secondary" onclick="clearSelection()">✕ Clear</button>
         </div>
 
@@ -198,6 +202,7 @@
         $('statPhone').textContent = stats.with_phone.toLocaleString();
         $('statWeb').textContent = stats.with_website.toLocaleString();
         $('statSocial').textContent = stats.with_social.toLocaleString();
+        $('statEmailsSent').textContent = stats.emails_sent.toLocaleString();
         $('navCount').textContent = `${stats.total.toLocaleString()} contacts`;
         renderCharts(stats);
     }
@@ -260,7 +265,7 @@
         updateBulkBar();
 
         if (data.contacts.length === 0) {
-            contactsBody.innerHTML = '<tr><td colspan="9" class="loading-cell">No contacts match your filters.</td></tr>';
+            contactsBody.innerHTML = '<tr><td colspan="9" class="loading-cell">' + (state.search ? 'No contacts match "' + esc(state.search) + '"' : 'No contacts match your filters.') + '</td></tr>';
         } else {
             contactsBody.innerHTML = data.contacts.map(c => {
                 const notes = c.notes || '';
@@ -333,6 +338,29 @@
         ).join(' ');
     }
 
+    function renderEmailHistory(logs) {
+        if (!logs || logs.length === 0) return '<div class="email-history"><div class="history-title">📬 Email History</div><div class="history-empty">No emails sent yet</div></div>';
+        return `<div class="email-history">
+            <div class="history-title">📬 Email History <span class="history-count">${logs.length}</span></div>
+            ${logs.map(log => {
+                const time = log.created_at || '';
+                const notes = log.notes || '';
+                const outcome = log.outcome || 'sent';
+                const isError = outcome.toLowerCase().includes('error') || outcome.toLowerCase().includes('fail');
+                return `<div class="history-entry${isError ? ' history-error' : ''}">
+                    <div class="history-dot${isError ? ' dot-error' : ''}"></div>
+                    <div class="history-content">
+                        <div class="history-notes">${esc(notes)}</div>
+                        <div class="history-meta">
+                            <span class="history-status${isError ? ' status-error' : ' status-ok'}">${isError ? '❌' : '✅'} ${esc(outcome)}</span>
+                            <span class="history-time">${time ? esc(time) : ''}</span>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    }
+
     // ─── Compose state ────────────────────────────────────────────
     let composeContactId = '';
     let composeEmail = '';
@@ -344,6 +372,7 @@
         $('composeSubject').value = '';
         $('composeBody').value = '';
         $('composeStatus').textContent = '';
+        clearFile();
         $('composeSection').style.display = 'block';
         $('composeSubject').focus();
     }
@@ -353,9 +382,33 @@
         $('composeStatus').textContent = '';
     }
 
+    function onFileSelect(input) {
+        const file = input.files[0];
+        if (!file) { clearFile(); return; }
+        const maxSize = 20 * 1024 * 1024; // 20MB
+        if (file.size > maxSize) {
+            $('composeStatus').textContent = '⚠️ File too large. Maximum is 20MB.';
+            $('composeStatus').className = 'compose-status error';
+            clearFile();
+            return;
+        }
+        $('fileName').textContent = `📎 ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+        $('fileClear').style.display = 'inline';
+        $('composeStatus').textContent = '';
+    }
+
+    function clearFile() {
+        $('composeFile').value = '';
+        $('fileName').textContent = '';
+        $('fileClear').style.display = 'none';
+    }
+
     async function sendEmail() {
         const subject = $('composeSubject').value.trim();
         const body = $('composeBody').value.trim();
+        const fileInput = $('composeFile');
+        const hasFile = fileInput && fileInput.files && fileInput.files.length > 0;
+        
         if (!subject) { $('composeStatus').textContent = '⚠️ Subject is required'; $('composeStatus').className = 'compose-status error'; return; }
         if (!body) { $('composeStatus').textContent = '⚠️ Message body is required'; $('composeStatus').className = 'compose-status error'; return; }
 
@@ -366,23 +419,49 @@
         $('composeStatus').className = 'compose-status';
 
         try {
-            const res = await fetch('/api/send-email', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+            let bodyData;
+            let headers = {};
+            
+            if (hasFile) {
+                // Use FormData when there's an attachment
+                const formData = new FormData();
+                formData.append('contact_id', composeContactId);
+                formData.append('email', composeEmail);
+                formData.append('subject', subject);
+                formData.append('body', body);
+                formData.append('file', fileInput.files[0]);
+                bodyData = formData;
+                // Don't set Content-Type — browser sets it with boundary for FormData
+            } else {
+                // Use JSON for simple text-only emails
+                headers['Content-Type'] = 'application/json';
+                bodyData = JSON.stringify({
                     contact_id: composeContactId,
                     email: composeEmail,
                     subject: subject,
                     body: body,
-                }),
+                });
+            }
+            
+            const res = await fetch('/api/send-email', {
+                method: 'POST',
+                headers: headers,
+                body: bodyData,
             });
             const data = await res.json();
             if (data.error) {
                 $('composeStatus').textContent = '❌ ' + data.error;
                 $('composeStatus').className = 'compose-status error';
             } else {
-                $('composeStatus').textContent = '✅ Email sent to ' + data.to;
+                let msg = '✅ Email sent to ' + data.to;
+                if (data.attachment) {
+                    msg += ' (📎 ' + data.attachment + ')';
+                }
+                $('composeStatus').textContent = msg;
                 $('composeStatus').className = 'compose-status success';
+                // Refresh email history and stats
+                refreshEmailHistory(composeContactId);
+                loadStats();
                 setTimeout(hideCompose, 3000);
             }
         } catch (e) {
@@ -394,13 +473,30 @@
         }
     }
 
+    async function refreshEmailHistory(contactId) {
+        if (!contactId) return;
+        try {
+            const logData = await fetchJSON(`/api/email-log?contact_id=${contactId}&limit=25`);
+            const historyEl = document.querySelector('.email-history');
+            if (historyEl) {
+                historyEl.outerHTML = renderEmailHistory(logData.logs || []);
+            }
+        } catch (e) {
+            // Silently fail — not critical
+        }
+    }
+
     // ─── Detail Modal ──────────────────────────────────────────────
     async function openDetail(id) {
         modalOverlay.classList.add('visible');
         modalBody.innerHTML = '<div class="loading-cell">Loading...</div>';
         try {
-            const c = await fetchJSON(`/api/contacts/${id}`);
+            const [c, logData] = await Promise.all([
+                fetchJSON(`/api/contacts/${id}`),
+                fetchJSON(`/api/email-log?contact_id=${id}&limit=25`),
+            ]);
             modalTitle.textContent = c.company;
+            const logs = logData.logs || [];
             modalBody.innerHTML = `
                 <div class="detail-grid">
                     <div class="detail-field"><span class="detail-label">Company</span><span class="detail-value">${esc(c.company)}</span></div>
@@ -433,11 +529,21 @@
                         <label>Message</label>
                         <textarea id="composeBody" class="compose-textarea" rows="6" placeholder="Write your message..."></textarea>
                     </div>
+                    <div class="compose-field">
+                        <label>Attachment <span class="file-size-hint">(max 20MB)</span></label>
+                        <div class="file-input-wrapper">
+                            <input type="file" id="composeFile" class="file-input" onchange="onFileSelect(this)">
+                            <label for="composeFile" class="file-label">📎 Choose File</label>
+                            <span class="file-name" id="fileName"></span>
+                            <button type="button" class="file-clear" id="fileClear" onclick="clearFile()" style="display:none">✕</button>
+                        </div>
+                    </div>
                     <div class="compose-actions">
                         <button class="btn btn-primary" id="sendBtn" onclick="sendEmail()">📤 Send</button>
                         <span class="compose-status" id="composeStatus"></span>
                     </div>
                 </div>
+                ${renderEmailHistory(logs)}
             `;
         } catch (e) {
             modalBody.innerHTML = `<div class="error">Error loading contact: ${e.message}</div>`;
@@ -474,10 +580,38 @@
         loadContacts();
     }
 
+    // Live search with debounce — filters as you type
+    let searchTimeout = null;
     searchBtn.addEventListener('click', doSearch);
     searchInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doSearch();
     });
+    searchInput.addEventListener('input', () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(doSearch, 300);
+    });
+
+    function generateReport() {
+        const params = new URLSearchParams();
+        if (state.search) params.set('search', state.search);
+        if (state.vertical) params.set('vertical', state.vertical);
+        if (state.type) params.set('type', state.type);
+        if (state.source) params.set('source', state.source);
+        const url = `/report?${params.toString()}`;
+        window.open(url, '_blank');
+    }
+
+    function exportCSV() {
+        const params = new URLSearchParams();
+        if (state.search) params.set('search', state.search);
+        if (state.vertical) params.set('vertical', state.vertical);
+        if (state.type) params.set('type', state.type);
+        if (state.source) params.set('source', state.source);
+        params.set('sort_by', state.sort_by);
+        params.set('sort_dir', state.sort_dir);
+        const url = `/api/export-csv?${params.toString()}`;
+        window.open(url, '_blank');
+    }
 
     clearBtn.addEventListener('click', () => {
         searchInput.value = '';
@@ -638,6 +772,40 @@
         const el = document.getElementById('bulkStatus');
         el.textContent = msg;
         el.className = isError ? 'compose-status error' : 'compose-status success';
+    }
+
+    function exportSelectedCSV() {
+        if (selectedIds.size === 0) return;
+        const ids = Array.from(selectedIds);
+        const statusEl = document.getElementById('bulkEmailCount');
+        const originalText = statusEl.textContent;
+        statusEl.textContent = '⏳ Exporting...';
+        // Use fetch to POST the IDs and trigger a download
+        fetch('/api/export-selected-csv', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids }),
+        })
+        .then(res => {
+            if (!res.ok) throw new Error('Export failed');
+            return res.blob();
+        })
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `contacts_selected_${ids.length}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            statusEl.textContent = originalText;
+        })
+        .catch(err => {
+            console.error('CSV export error:', err);
+            statusEl.textContent = '❌ Export failed';
+            setTimeout(() => { statusEl.textContent = originalText; }, 3000);
+        });
     }
 
     // ─── Init ──────────────────────────────────────────────────────

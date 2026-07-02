@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Report — {{ title }}</title>
+    <style>
+        /* ─── Print-ready Report Styles ─────────────────────────── */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            color: #1a1a2e;
+            background: #fff;
+            line-height: 1.5;
+            padding: 30px 40px;
+        }
+        @media print {
+            body { padding: 0; }
+            .no-print { display: none !important; }
+            @page { margin: 20mm 15mm; }
+        }
+
+        /* Header */
+        .report-header {
+            border-bottom: 3px solid #1a1a2e;
+            padding-bottom: 20px;
+            margin-bottom: 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .report-title h1 {
+            font-size: 26px;
+            font-weight: 800;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+        .report-title .subtitle {
+            font-size: 14px;
+            color: #666;
+        }
+        .report-meta {
+            text-align: right;
+            font-size: 12px;
+            color: #888;
+        }
+        .report-meta div { margin-bottom: 2px; }
+
+        /* Summary Cards */
+        .summary-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+        .summary-card {
+            flex: 1;
+            min-width: 120px;
+            background: #f5f7fa;
+            border: 1px solid #e0e4e8;
+            border-radius: 8px;
+            padding: 14px 18px;
+            text-align: center;
+        }
+        .summary-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+        .summary-card .label {
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+        }
+        .summary-card.total .value { color: #2563eb; }
+        .summary-card.email .value { color: #16a34a; }
+        .summary-card.phone .value { color: #d97706; }
+        .summary-card.web .value { color: #7c3aed; }
+        .summary-card.social .value { color: #ec4899; }
+
+        /* Sections */
+        .section-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a2e;
+            border-bottom: 2px solid #e0e4e8;
+            padding-bottom: 8px;
+            margin: 25px 0 15px;
+        }
+        .section-title .count {
+            font-weight: 400;
+            color: #888;
+            font-size: 14px;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-bottom: 20px;
+        }
+        th {
+            background: #f0f2f5;
+            padding: 8px 10px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #555;
+            border-bottom: 2px solid #d0d4dc;
+        }
+        td {
+            padding: 7px 10px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+        tr:nth-child(even) { background: #fafbfc; }
+        .agency-name { font-weight: 600; color: #1a1a2e; }
+        .badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .badge-type { background: #dbeafe; color: #1d4ed8; }
+        .badge-vertical { background: #dcfce7; color: #15803d; }
+        .badge-source { background: #fef3c7; color: #92400e; }
+        .notes-cell { font-size: 11px; color: #666; max-width: 250px; }
+
+        /* Email log section */
+        .email-entry {
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 11px;
+        }
+        .email-entry:last-child { border-bottom: none; }
+        .email-entry .e-subject { font-weight: 600; }
+        .email-entry .e-meta { color: #888; font-size: 10px; }
+
+        /* Footer */
+        .report-footer {
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 1px solid #e0e4e8;
+            font-size: 11px;
+            color: #999;
+            text-align: center;
+        }
+
+        /* Print button */
+        .print-btn {
+            display: inline-block;
+            padding: 10px 24px;
+            background: #1a1a2e;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .print-btn:hover { background: #333; }
+
+        /* Charts for report */
+        .mini-charts {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .mini-chart-card {
+            background: #f5f7fa;
+            border: 1px solid #e0e4e8;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .mini-chart-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .mini-bar-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 3px;
+            font-size: 11px;
+        }
+        .mini-bar-label {
+            width: 70px;
+            text-align: right;
+            color: #666;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .mini-bar-track {
+            flex: 1;
+            height: 12px;
+            background: #e0e4e8;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .mini-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            background: #2563eb;
+        }
+        .mini-bar-count {
+            width: 30px;
+            color: #666;
+            text-align: right;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="no-print">
+    <button class="print-btn" onclick="window.print()">🖨️ Print / Save as PDF</button>
+    <button class="print-btn" style="background:#555" onclick="window.close()">✕ Close</button>
+</div>
+
+<div class="report-header">
+    <div class="report-title">
+        <h1>{{ title }}</h1>
+        <div class="subtitle">CRM Intelligence Contacts Report</div>
+    </div>
+    <div class="report-meta">
+        <div>Generated: {{ generated_at }}</div>
+        <div>Total contacts: {{ total_count }}</div>
+    </div>
+</div>
+
+<!-- Summary -->
+<div class="summary-row">
+    <div class="summary-card total"><div class="value">{{ total_count }}</div><div class="label">Total</div></div>
+    <div class="summary-card email"><div class="value">{{ with_email }}</div><div class="label">With Email</div></div>
+    <div class="summary-card phone"><div class="value">{{ with_phone }}</div><div class="label">With Phone</div></div>
+    <div class="summary-card web"><div class="value">{{ with_website }}</div><div class="label">With Website</div></div>
+    <div class="summary-card social"><div class="value">{{ with_social }}</div><div class="label">With Social</div></div>
+</div>
+
+<!-- Mini Charts -->
+<div class="mini-charts">
+    <div class="mini-chart-card">
+        <div class="mini-chart-title">Top Verticals</div>
+        {% for v in by_vertical %}
+        <div class="mini-bar-row">
+            <span class="mini-bar-label">{{ v.name }}</span>
+            <div class="mini-bar-track"><div class="mini-bar-fill" style="width:{{ v.pct }}%"></div></div>
+            <span class="mini-bar-count">{{ v.count }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="mini-chart-card">
+        <div class="mini-chart-title">By Type</div>
+        {% for t in by_type %}
+        <div class="mini-bar-row">
+            <span class="mini-bar-label">{{ t.name }}</span>
+            <div class="mini-bar-track"><div class="mini-bar-fill" style="width:{{ t.pct }}%;background:#16a34a"></div></div>
+            <span class="mini-bar-count">{{ t.count }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="mini-chart-card">
+        <div class="mini-chart-title">By Source</div>
+        {% for s in by_source %}
+        <div class="mini-bar-row">
+            <span class="mini-bar-label">{{ s.name }}</span>
+            <div class="mini-bar-track"><div class="mini-bar-fill" style="width:{{ s.pct }}%;background:#d97706"></div></div>
+            <span class="mini-bar-count">{{ s.count }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Contacts Table -->
+<div class="section-title">Contact Details <span class="count">({{ contacts|length }} entries)</span></div>
+
+<table>
+    <thead>
+        <tr>
+            <th>Agency</th>
+            <th>Contact</th>
+            <th>Email</th>
+            <th>Phone</th>
+            <th>Type</th>
+            <th>Vertical</th>
+            <th>Source</th>
+            <th>Notes</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in contacts %}
+        <tr>
+            <td class="agency-name">{{ c.company }}</td>
+            <td>{{ c.contact_name or '—' }}</td>
+            <td>{{ c.email or '—' }}</td>
+            <td>{{ c.phone or '—' }}</td>
+            <td><span class="badge badge-type">{{ c.type or '-' }}</span></td>
+            <td><span class="badge badge-vertical">{{ c.vertical or '-' }}</span></td>
+            <td><span class="badge badge-source">{{ c.source or '-' }}</span></td>
+            <td class="notes-cell">{{ c.notes[:200] if c.notes else '—' }}{% if c.notes and c.notes|length > 200 %}...{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="report-footer">
+    CRM Dashboard — Generated {{ generated_at }} — {{ total_count }} contacts in report
+</div>
+
+</body>
+</html>

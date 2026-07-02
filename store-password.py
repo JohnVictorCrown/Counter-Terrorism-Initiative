@@ -18,9 +18,9 @@ from pathlib import Path
 import sqlcipher3
 
 DB_PATH = Path(__file__).resolve().parent / "mail-credentials.db"
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+ENV_PATH = Path(__file__).resolve().parent / ".env"
 
-GMAIL_ADDRESS = "water.enterprises.org@gmail.com"
+GMAIL_ADDRESS = "john.victor.crown@gmail.com"
 
 
 def load_db_password() -> str:
