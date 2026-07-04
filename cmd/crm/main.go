@@ -651,6 +651,7 @@ func runCampaign(args []string) {
 	dryRun := fs.Bool("dry-run", false, "Preview the campaign without sending")
 	confirm := fs.Bool("confirm", false, "Show full segment summary and ask for confirmation")
 	noStatusUpdate := fs.Bool("no-status-update", false, "Don't auto-update status to 'contacted'")
+	followupDays := fs.Int("followup", 0, "Days until follow-up (auto-sets next_action_date on sent leads)")
 	fs.Parse(args)
 
 	// Validate required flags
@@ -844,6 +845,11 @@ func runCampaign(args []string) {
 		if !*noStatusUpdate {
 			fmt.Printf("   Status will be updated from '%s' to 'contacted'.\n", *status)
 		}
+		if *followupDays > 0 {
+			now := time.Now()
+			future := now.AddDate(0, 0, *followupDays)
+			fmt.Printf("   Follow-up set to %s (+%d days)\n", future.Format("2006-01-02"), *followupDays)
+		}
 		fmt.Println()
 		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("  Send now? (y/N): ")
@@ -876,6 +882,14 @@ func runCampaign(args []string) {
 
 	// Log every email sent and update statuses
 	updated := 0
+	followupSet := 0
+	followupDate := ""
+	if *followupDays > 0 {
+		// Calculate follow-up date: today + N days in YYYY-MM-DD format
+		now := time.Now()
+		future := now.AddDate(0, 0, *followupDays)
+		followupDate = future.Format("2006-01-02")
+	}
 	for _, lead := range emailable {
 		sentEmail := ""
 		if len(lead.Emails) > 0 {
@@ -883,22 +897,39 @@ func runCampaign(args []string) {
 		}
 		db.LogEmail(lead.ID, sentEmail, *subject, bodyText, "sent", "")
 
+		updateData := make(map[string]string)
 		if !*noStatusUpdate && lead.Status != "contacted" {
-			_ = db.UpdateLead(lead.ID, map[string]string{
-				"status": "contacted",
-			})
-			updated++
+			updateData["status"] = "contacted"
+		}
+		if followupDate != "" {
+			updateData["next_action"] = fmt.Sprintf("Follow up on: %s", *subject)
+			updateData["next_action_date"] = followupDate
+		}
+		if len(updateData) > 0 {
+			_ = db.UpdateLead(lead.ID, updateData)
+			if updateData["status"] != "" {
+				updated++
+			}
+			if updateData["next_action_date"] != "" {
+				followupSet++
+			}
 		}
 	}
 
 	if updated > 0 {
 		fmt.Printf("   Status updated to 'contacted' for %d leads\n", updated)
 	}
+	if followupSet > 0 {
+		fmt.Printf("   Follow-up set to %s for %d leads\n", followupDate, followupSet)
+	}
 	fmt.Println()
 	fmt.Println("📋 Next steps:")
 	fmt.Println("   1. Track replies: crm list --status replied")
-	fmt.Println("   2. Log follow-ups: crm log <id>")
-	fmt.Println("   3. View due follow-ups: crm followups")
+	fmt.Println("   2. View due follow-ups: crm followups")
+	if followupDate != "" {
+		fmt.Printf("   3. Follow-up date: %s\n", followupDate)
+	}
+	fmt.Println()
 }
 
 // sortedKeys returns map keys sorted alphabetically (for deterministic output)
