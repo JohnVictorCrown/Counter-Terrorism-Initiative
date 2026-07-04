@@ -179,11 +179,16 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-NUL.terabox.uploading.cfg
-NUL
+
+# Editor / temp files
 *.exe
-dashboard.exe~
-dashboard.exe
-dashboard.exe
+*.terabox.uploading.cfg
+*~
+*.bak
+databases/*.bak
+
+# Python bytecode
+__pycache__/
 *.exe
+dashboard.exe
 crm.exe

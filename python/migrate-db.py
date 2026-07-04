@@ -111,28 +111,54 @@ def get_schema_sql(conn) -> list:
     return [r[0] for r in rows]
 
 
-def migrate_via_attach(old_conn, new_path: Path, password: str, tables: list) -> bool:
-    """Migrate data by creating a new v4-format DB and ATTACH-copying all tables."""
-    # Create new database with v4 defaults
+def migrate_via_attach(old_path: Path, new_path: Path, password: str, tables: list, verbose: bool) -> bool:
+    """Migrate data by creating a new v4-format DB and ATTACH-copying all tables.
+
+    Strategy:
+      1. Open old DB with v3 compat (read-only) to get schema + verify access
+      2. Create a new DB with v4 defaults
+      3. From the new v4 connection, ATTACH the old DB with explicit v3 compat
+      4. Copy data from attached old_db to main (new v4) schema
+      5. Detach, verify new DB with v4 defaults
+    """
+    # Step 1: Open old DB with v3 compat to get schema
+    if verbose:
+        print(f"   Reading schema from old database...")
+    old_conn = open_with_v3_compat(old_path, password)
+    schema = get_schema_sql(old_conn)
+    if verbose:
+        print(f"   Found {len(schema)} schema statements")
+    old_conn.close()
+
+    # Step 2: Create new database with v4 defaults
+    if verbose:
+        print(f"   Creating new v4 database...")
     new_conn = sqlcipher3.connect(str(new_path))
     new_conn.execute(f"PRAGMA key=\"x'{password.encode().hex()}'\"")
     new_conn.execute("PRAGMA journal_mode=WAL")
-
-    # Get schema from old DB
-    schema = get_schema_sql(old_conn)
     for stmt in schema:
         new_conn.execute(stmt)
     new_conn.commit()
 
-    # ATTACH old DB to new and copy data
-    old_conn.execute(f"ATTACH DATABASE '{new_path}' AS new_db")
+    # Step 3: From new v4 connection, ATTACH old DB with v3 compat
+    if verbose:
+        print(f"   ATTACHing old database with v3 compatibility...")
+    new_conn.execute(f"ATTACH DATABASE '{old_path}' AS old_db")
+    # Set v3 compat BEFORE providing the key for the attached old DB
+    new_conn.execute("PRAGMA old_db.cipher_compatibility = 3")
+    new_conn.execute(f"PRAGMA old_db.key = \"x'{password.encode().hex()}'\"")
 
+    # Step 4: Copy data from old to new
+    if verbose:
+        print(f"   Copying tables: {', '.join(tables)}")
     for table in tables:
-        old_conn.execute(f"INSERT OR IGNORE INTO new_db.{table} SELECT * FROM main.{table}")
-    old_conn.commit()
-    old_conn.execute("DETACH DATABASE new_db")
-
+        new_conn.execute(f"INSERT OR IGNORE INTO main.{table} SELECT * FROM old_db.{table}")
+    new_conn.commit()
+    new_conn.execute("DETACH DATABASE old_db")
     new_conn.close()
+
+    if verbose:
+        print(f"   Data copied successfully")
     return True
 
 
@@ -202,13 +228,15 @@ def migrate_database(info: dict, password: str, dry_run: bool, verbose: bool) ->
 
         try:
             conn = open_with_v3_compat(db_path, password)
-            tables = [r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
+            # Get list of tables (excluding sqlite internal ones)
+            conn2 = open_with_v3_compat(db_path, password)
+            tables = [r[0] for r in conn2.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()]
+            conn2.close()
 
             if not tables:
                 print(f"   ⚠️  No tables found in database")
-                conn.close()
                 return False
 
             # Create temp file for new v4 database
@@ -222,8 +250,7 @@ def migrate_database(info: dict, password: str, dry_run: bool, verbose: bool) ->
                 print(f"   Creating new v4 database at {tmp_path.name}...")
                 print(f"   Copying tables: {', '.join(tables)}")
 
-            migrate_via_attach(conn, tmp_path, password, tables)
-            conn.close()
+            migrate_via_attach(db_path, tmp_path, password, tables, verbose)
 
             # Verify the new database is readable with v4 defaults
             if verbose:
