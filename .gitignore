@@ -187,8 +187,7 @@ cython_debug/
 *.bak
 databases/*.bak
 
-# Python bytecode
-__pycache__/
+
 *.exe
 dashboard.exe
 crm.exe
