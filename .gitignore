@@ -181,3 +181,9 @@ cython_debug/
 .cursorindexingignore
 NUL.terabox.uploading.cfg
 NUL
+*.exe
+dashboard.exe~
+dashboard.exe
+dashboard.exe
+*.exe
+crm.exe

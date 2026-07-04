@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,17 +61,22 @@ func openDB(path string) (*sql.DB, error) {
 	if pw == "" {
 		return nil, fmt.Errorf("EMAIL_DB_PASSWORD not found")
 	}
-	db, err := sql.Open("sqlite3", path)
+	// go-sqlcipher/v4 processes _pragma_key at connection time.
+	// The database has been migrated to SQLCipher v4 format (SHA512/256K iterations),
+	// so no cipher_compatibility is needed — just the key in Python's x'hex' format.
+	passphrase := fmt.Sprintf("x'%x'", []byte(pw))
+	dsn := fmt.Sprintf("%s?_pragma_key=%s&_pragma_journal_mode=WAL",
+		path, url.QueryEscape(passphrase))
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sql open: %w", err)
 	}
-	hexKey := fmt.Sprintf("%x", []byte(pw))
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA key = \"x'%s'\"", hexKey)); err != nil {
+	// Verify the key is correct by running a query
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master").Scan(&count); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("pragma key: %w", err)
 	}
-	db.Exec("PRAGMA cipher_compatibility = 3")
-	db.Exec("PRAGMA journal_mode=WAL")
 	return db, nil
 }
 
