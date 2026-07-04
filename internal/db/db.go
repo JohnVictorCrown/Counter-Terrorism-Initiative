@@ -15,13 +15,29 @@ import (
 )
 
 var (
-	DBPath    = filepath.Join(".", "databases", "leads.db")
-	MailDB    = filepath.Join(".", "databases", "mail-credentials.db")
-	EnvPath   = filepath.Join(".", ".env")
-	GmailAddr = "john.victor.crown@gmail.com"
+	DBPath     = filepath.Join(".", "databases", "leads.db")
+	MailDB     = filepath.Join(".", "databases", "mail-credentials.db")
+	EnvPath    = filepath.Join(".", ".env")
+	GmailAddr  = "john.victor.crown@gmail.com"
 	SMTPServer = "smtp.gmail.com"
-	SMTPPort  = 587
+	SMTPPort   = 587
 )
+
+// leadCols is the explicit column list for leads (without email, since it moved to lead_emails).
+const leadCols = "l.id, l.company, l.contact_name, l.phone, l.website, " +
+	"COALESCE(l.tier, ''), l.type, l.vertical, " +
+	"COALESCE(l.check_size, ''), COALESCE(l.pitch_angle, ''), " +
+	"l.status, COALESCE(l.next_action, ''), COALESCE(l.next_action_date, ''), " +
+	"l.notes, l.source, l.created_at, l.updated_at"
+
+const leadColsShort = "l.id, l.company, l.contact_name, l.phone, l.website, " +
+	"l.type, l.vertical, l.source, l.status, l.notes"
+
+// leadFromClause is the FROM + LEFT JOIN for emails.
+const leadFromClause = "FROM leads l LEFT JOIN lead_emails le ON le.lead_id = l.id"
+
+// leadGroupBy is the GROUP BY for the lead columns (needed when joining emails).
+const leadGroupBy = "GROUP BY l.id"
 
 func LoadEnvVar(key string) string {
 	if data, err := os.ReadFile(EnvPath); err == nil {
@@ -61,9 +77,6 @@ func openDB(path string) (*sql.DB, error) {
 	if pw == "" {
 		return nil, fmt.Errorf("EMAIL_DB_PASSWORD not found")
 	}
-	// go-sqlcipher/v4 processes _pragma_key at connection time.
-	// The database has been migrated to SQLCipher v4 format (SHA512/256K iterations),
-	// so no cipher_compatibility is needed — just the key in Python's x'hex' format.
 	passphrase := fmt.Sprintf("x'%x'", []byte(pw))
 	dsn := fmt.Sprintf("%s?_pragma_key=%s&_pragma_journal_mode=WAL",
 		path, url.QueryEscape(passphrase))
@@ -71,7 +84,6 @@ func openDB(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sql open: %w", err)
 	}
-	// Verify the key is correct by running a query
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master").Scan(&count); err != nil {
 		db.Close()
@@ -168,15 +180,27 @@ func GetContact(id string) (*models.Contact, error) {
 	}
 	defer db.Close()
 
-	row := db.QueryRow("SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes, created_at, updated_at, COALESCE(check_size, ''), COALESCE(pitch_angle, ''), COALESCE(next_action, ''), COALESCE(next_action_date, ''), COALESCE(tier, '') FROM leads WHERE id = ?", id)
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		FROM leads l LEFT JOIN lead_emails le ON le.lead_id = l.id
+		WHERE l.id = ? GROUP BY l.id`,
+		leadCols, models.EmailsSeparator)
+
+	row := db.QueryRow(query, id)
 	var c models.Contact
-	err = row.Scan(&c.ID, &c.Company, &c.ContactName, &c.Email, &c.Phone, &c.Website,
-		&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes, &c.CreatedAt, &c.UpdatedAt,
-		&c.CheckSize, &c.PitchAngle, &c.NextAction, &c.NextActionDate, &c.Tier)
+	var emailsStr string
+	err = row.Scan(&c.ID, &c.Company, &c.ContactName, &c.Phone, &c.Website,
+		&c.Tier, &c.Type, &c.Vertical, &c.CheckSize, &c.PitchAngle,
+		&c.Status, &c.NextAction, &c.NextActionDate,
+		&c.Notes, &c.Source, &c.CreatedAt, &c.UpdatedAt,
+		&emailsStr)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &c, err
+	if err != nil {
+		return nil, err
+	}
+	c.Emails = splitEmails(emailsStr)
+	return &c, nil
 }
 
 func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
@@ -186,7 +210,7 @@ func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
 	}
 	defer db.Close()
 
-	allowedSorts := map[string]bool{"company": true, "type": true, "vertical": true, "source": true, "phone": true, "email": true, "website": true, "status": true}
+	allowedSorts := map[string]bool{"company": true, "type": true, "vertical": true, "source": true, "phone": true, "website": true, "status": true}
 	if !allowedSorts[f.SortBy] {
 		f.SortBy = "company"
 	}
@@ -200,19 +224,19 @@ func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
 
 	if f.Search != "" {
 		s := "%" + f.Search + "%"
-		clauses = append(clauses, "(company LIKE ? OR email LIKE ? OR phone LIKE ? OR website LIKE ? OR notes LIKE ? OR contact_name LIKE ?)")
+		clauses = append(clauses, "(l.company LIKE ? OR le.email LIKE ? OR l.phone LIKE ? OR l.website LIKE ? OR l.notes LIKE ? OR l.contact_name LIKE ?)")
 		params = append(params, s, s, s, s, s, s)
 	}
 	if f.Vertical != "" {
-		clauses = append(clauses, "vertical = ?")
+		clauses = append(clauses, "l.vertical = ?")
 		params = append(params, f.Vertical)
 	}
 	if f.Type != "" {
-		clauses = append(clauses, "type = ?")
+		clauses = append(clauses, "l.type = ?")
 		params = append(params, f.Type)
 	}
 	if f.Source != "" {
-		clauses = append(clauses, "source = ?")
+		clauses = append(clauses, "l.source = ?")
 		params = append(params, f.Source)
 	}
 
@@ -221,8 +245,9 @@ func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
 		where = "WHERE " + strings.Join(clauses, " AND ")
 	}
 
+	// Count (use subquery to avoid double-count from join)
+	countQ := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT l.id FROM leads l LEFT JOIN lead_emails le ON le.lead_id = l.id %s GROUP BY l.id)", where)
 	var total int
-	countQ := "SELECT COUNT(*) FROM leads " + where
 	db.QueryRow(countQ, params...).Scan(&total)
 
 	if f.Page < 1 {
@@ -233,8 +258,10 @@ func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
 	}
 	offset := (f.Page - 1) * f.PerPage
 
-	query := fmt.Sprintf("SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes FROM leads %s ORDER BY %s %s LIMIT ? OFFSET ?",
-		where, f.SortBy, sortDir)
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s %s GROUP BY l.id ORDER BY l.%s %s LIMIT ? OFFSET ?`,
+		leadColsShort, models.EmailsSeparator,
+		leadFromClause, where, f.SortBy, sortDir)
 	params = append(params, f.PerPage, offset)
 
 	rows, err := db.Query(query, params...)
@@ -246,8 +273,11 @@ func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
 	var contacts []models.Contact
 	for rows.Next() {
 		var c models.Contact
-		rows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Email, &c.Phone, &c.Website,
-			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes)
+		var emailsStr string
+		rows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Phone, &c.Website,
+			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
+			&emailsStr)
+		c.Emails = splitEmails(emailsStr)
 		contacts = append(contacts, c)
 	}
 
@@ -269,13 +299,19 @@ func AddLead(input models.LeadInput) (string, error) {
 	}
 	defer db.Close()
 
-	_, err = db.Exec(
-		`INSERT INTO leads (id, company, contact_name, email, phone, website,
+	tx, err := db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(
+		`INSERT INTO leads (id, company, contact_name, phone, website,
 		   tier, type, vertical, check_size, pitch_angle, status,
 		   next_action, next_action_date, notes, source)
-		   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, input.Company, input.ContactName,
-		input.Email, input.Phone, input.Website,
+		input.Phone, input.Website,
 		defaultStr(input.Tier, "3"), orgType, input.Vertical,
 		input.CheckSize, input.PitchAngle,
 		defaultStr(input.Status, "cold"), input.NextAction,
@@ -284,12 +320,49 @@ func AddLead(input models.LeadInput) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("insert lead: %w", err)
 	}
+
+	// Insert emails
+	for i, email := range input.Emails {
+		email = strings.TrimSpace(email)
+		if email == "" {
+			continue
+		}
+		isPrimary := 0
+		if i == 0 {
+			isPrimary = 1
+		}
+		_, err = tx.Exec(
+			"INSERT INTO lead_emails (lead_id, email, is_primary) VALUES (?, ?, ?)",
+			id, email, isPrimary,
+		)
+		if err != nil {
+			return "", fmt.Errorf("insert email '%s': %w", email, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
 	return id, nil
 }
 
+// UpdateLead updates lead fields. If data contains "emails", it replaces all
+// emails for that lead (delete old + insert new).
 func UpdateLead(lid string, data map[string]string) error {
 	if t, ok := data["type"]; ok && strings.TrimSpace(t) == "" {
 		return fmt.Errorf("type cannot be empty. Choose from: %s", strings.Join(models.ValidTypes, ", "))
+	}
+
+	// Extract emails from data if present
+	var newEmails []string
+	if emailsStr, ok := data["emails"]; ok {
+		delete(data, "emails")
+		for _, e := range strings.Split(emailsStr, ",") {
+			e = strings.TrimSpace(e)
+			if e != "" {
+				newEmails = append(newEmails, e)
+			}
+		}
 	}
 
 	fields := make([]string, 0, len(data))
@@ -303,12 +376,9 @@ func UpdateLead(lid string, data map[string]string) error {
 		params = append(params, val)
 	}
 
-	if len(fields) == 0 {
+	if len(fields) == 0 && newEmails == nil {
 		return nil
 	}
-
-	fields = append(fields, "updated_at = datetime('now')")
-	params = append(params, lid)
 
 	db, err := GetDB()
 	if err != nil {
@@ -316,9 +386,45 @@ func UpdateLead(lid string, data map[string]string) error {
 	}
 	defer db.Close()
 
-	query := fmt.Sprintf("UPDATE leads SET %s WHERE id = ?", strings.Join(fields, ", "))
-	_, err = db.Exec(query, params...)
-	return err
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Update lead fields
+	if len(fields) > 0 {
+		fields = append(fields, "updated_at = datetime('now')")
+		params = append(params, lid)
+		query := fmt.Sprintf("UPDATE leads SET %s WHERE id = ?", strings.Join(fields, ", "))
+		_, err = tx.Exec(query, params...)
+		if err != nil {
+			return fmt.Errorf("update lead: %w", err)
+		}
+	}
+
+	// Update emails if provided
+	if newEmails != nil {
+		_, err = tx.Exec("DELETE FROM lead_emails WHERE lead_id = ?", lid)
+		if err != nil {
+			return fmt.Errorf("delete old emails: %w", err)
+		}
+		for i, email := range newEmails {
+			isPrimary := 0
+			if i == 0 {
+				isPrimary = 1
+			}
+			_, err = tx.Exec(
+				"INSERT INTO lead_emails (lead_id, email, is_primary) VALUES (?, ?, ?)",
+				lid, email, isPrimary,
+			)
+			if err != nil {
+				return fmt.Errorf("insert email '%s': %w", email, err)
+			}
+		}
+	}
+
+	return tx.Commit()
 }
 
 func DeleteLead(lid string) error {
@@ -389,28 +495,28 @@ func GetLeads(f LeadFilter) ([]models.Contact, error) {
 	var params []any
 
 	if f.Tier != "" {
-		clauses = append(clauses, "tier = ?")
+		clauses = append(clauses, "l.tier = ?")
 		params = append(params, f.Tier)
 	}
 	if f.Status != "" {
 		if f.Status == "active" {
-			clauses = append(clauses, "status NOT IN ('closed_won','closed_lost')")
+			clauses = append(clauses, "l.status NOT IN ('closed_won','closed_lost')")
 		} else {
-			clauses = append(clauses, "status = ?")
+			clauses = append(clauses, "l.status = ?")
 			params = append(params, f.Status)
 		}
 	}
 	if f.Vertical != "" {
-		clauses = append(clauses, "vertical = ?")
+		clauses = append(clauses, "l.vertical = ?")
 		params = append(params, f.Vertical)
 	}
 	if f.Type != "" {
-		clauses = append(clauses, "type = ?")
+		clauses = append(clauses, "l.type = ?")
 		params = append(params, f.Type)
 	}
 	if f.Search != "" {
 		s := "%" + f.Search + "%"
-		clauses = append(clauses, "(company LIKE ? OR contact_name LIKE ? OR email LIKE ?)")
+		clauses = append(clauses, "(l.company LIKE ? OR l.contact_name LIKE ? OR le.email LIKE ?)")
 		params = append(params, s, s, s)
 	}
 
@@ -419,7 +525,12 @@ func GetLeads(f LeadFilter) ([]models.Contact, error) {
 		where = "WHERE " + strings.Join(clauses, " AND ")
 	}
 
-	rows, err := db.Query("SELECT * FROM leads "+where+" ORDER BY updated_at DESC", params...)
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s %s %s ORDER BY l.updated_at DESC`,
+		leadCols, models.EmailsSeparator,
+		leadFromClause, where, leadGroupBy)
+
+	rows, err := db.Query(query, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -435,9 +546,15 @@ func GetFollowupsDue() ([]models.Contact, error) {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT * FROM leads WHERE next_action_date != ''
-		AND next_action_date <= date('now')
-		AND status NOT IN ('closed_won','closed_lost') ORDER BY next_action_date ASC`)
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s WHERE l.next_action_date != ''
+		AND l.next_action_date <= date('now')
+		AND l.status NOT IN ('closed_won','closed_lost')
+		%s ORDER BY l.next_action_date ASC`,
+		leadCols, models.EmailsSeparator,
+		leadFromClause, leadGroupBy)
+
+	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +581,7 @@ func GetStats() (*models.Stats, error) {
 		AND next_action_date <= date('now')
 		AND status NOT IN ('closed_won','closed_lost')`).Scan(&followupsDue)
 
-	recentRows, _ := db.Query("SELECT * FROM leads ORDER BY created_at DESC LIMIT 5")
+	recentRows := queryRecentLeads(db)
 	recent := scanContacts(recentRows)
 
 	byVertical := scanNameCount(db, "SELECT COALESCE(vertical, 'Unknown') as v, COUNT(*) as cnt FROM leads GROUP BY v ORDER BY cnt DESC LIMIT 10")
@@ -472,7 +589,7 @@ func GetStats() (*models.Stats, error) {
 	bySource := scanNameCount(db, "SELECT COALESCE(source, 'Unknown') as s, COUNT(*) as cnt FROM leads GROUP BY s ORDER BY cnt DESC")
 
 	var withEmail, withPhone, withWebsite, withSocial, emailsSent int
-	db.QueryRow("SELECT COUNT(*) FROM leads WHERE email IS NOT NULL AND email != ''").Scan(&withEmail)
+	db.QueryRow("SELECT COUNT(DISTINCT lead_id) FROM lead_emails").Scan(&withEmail)
 	db.QueryRow("SELECT COUNT(*) FROM leads WHERE phone IS NOT NULL AND phone != ''").Scan(&withPhone)
 	db.QueryRow("SELECT COUNT(*) FROM leads WHERE website IS NOT NULL AND website != ''").Scan(&withWebsite)
 	db.QueryRow("SELECT COUNT(*) FROM leads WHERE notes LIKE '%Social:%'").Scan(&withSocial)
@@ -495,11 +612,48 @@ func GetStats() (*models.Stats, error) {
 	}, nil
 }
 
+func queryRecentLeads(db *sql.DB) *sql.Rows {
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s %s ORDER BY l.created_at DESC LIMIT 5`,
+		leadCols, models.EmailsSeparator,
+		leadFromClause, leadGroupBy)
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil
+	}
+	return rows
+}
+
+// isUniqueConstraintError checks if an error is a SQLite UNIQUE constraint violation.
+func isUniqueConstraintError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
 func defaultStr(s, def string) string {
 	if s == "" {
 		return def
 	}
 	return s
+}
+
+// splitEmails splits a GROUP_CONCAT'd emails string into a slice.
+// Returns nil (not empty slice) when the string is empty.
+func splitEmails(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, models.EmailsSeparator)
+	// Filter out any empty parts from leading/trailing separators
+	var result []string
+	for _, p := range parts {
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func scanContacts(rows *sql.Rows) []models.Contact {
@@ -510,12 +664,15 @@ func scanContacts(rows *sql.Rows) []models.Contact {
 	var contacts []models.Contact
 	for rows.Next() {
 		var c models.Contact
+		var emailsStr string
 		rows.Scan(
-			&c.ID, &c.Company, &c.ContactName, &c.Email, &c.Phone,
+			&c.ID, &c.Company, &c.ContactName, &c.Phone,
 			&c.Website, &c.Tier, &c.Type, &c.Vertical, &c.CheckSize,
 			&c.PitchAngle, &c.Status, &c.NextAction, &c.NextActionDate,
 			&c.Notes, &c.Source, &c.CreatedAt, &c.UpdatedAt,
+			&emailsStr,
 		)
+		c.Emails = splitEmails(emailsStr)
 		contacts = append(contacts, c)
 	}
 	return contacts
@@ -572,7 +729,7 @@ func ExportCSV(f ContactFilter) ([]models.Contact, error) {
 	}
 	defer db.Close()
 
-	allowedSorts := map[string]bool{"company": true, "type": true, "vertical": true, "source": true, "phone": true, "email": true, "website": true, "status": true}
+	allowedSorts := map[string]bool{"company": true, "type": true, "vertical": true, "source": true, "phone": true, "website": true, "status": true}
 	if !allowedSorts[f.SortBy] {
 		f.SortBy = "company"
 	}
@@ -586,19 +743,19 @@ func ExportCSV(f ContactFilter) ([]models.Contact, error) {
 
 	if f.Search != "" {
 		s := "%" + f.Search + "%"
-		clauses = append(clauses, "(company LIKE ? OR email LIKE ? OR phone LIKE ? OR website LIKE ? OR notes LIKE ? OR contact_name LIKE ?)")
+		clauses = append(clauses, "(l.company LIKE ? OR le.email LIKE ? OR l.phone LIKE ? OR l.website LIKE ? OR l.notes LIKE ? OR l.contact_name LIKE ?)")
 		params = append(params, s, s, s, s, s, s)
 	}
 	if f.Vertical != "" {
-		clauses = append(clauses, "vertical = ?")
+		clauses = append(clauses, "l.vertical = ?")
 		params = append(params, f.Vertical)
 	}
 	if f.Type != "" {
-		clauses = append(clauses, "type = ?")
+		clauses = append(clauses, "l.type = ?")
 		params = append(params, f.Type)
 	}
 	if f.Source != "" {
-		clauses = append(clauses, "source = ?")
+		clauses = append(clauses, "l.source = ?")
 		params = append(params, f.Source)
 	}
 
@@ -607,7 +764,10 @@ func ExportCSV(f ContactFilter) ([]models.Contact, error) {
 		where = "WHERE " + strings.Join(clauses, " AND ")
 	}
 
-	query := fmt.Sprintf("SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes, created_at, updated_at FROM leads %s ORDER BY %s %s", where, f.SortBy, sortDir)
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s %s %s ORDER BY l.%s %s`,
+		leadColsShort, models.EmailsSeparator,
+		leadFromClause, where, leadGroupBy, f.SortBy, sortDir)
 	rows, err := db.Query(query, params...)
 	if err != nil {
 		return nil, err
@@ -617,8 +777,11 @@ func ExportCSV(f ContactFilter) ([]models.Contact, error) {
 	var contacts []models.Contact
 	for rows.Next() {
 		var c models.Contact
-		rows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Email, &c.Phone, &c.Website,
-			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes, &c.CreatedAt, &c.UpdatedAt)
+		var emailsStr string
+		rows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Phone, &c.Website,
+			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
+			&emailsStr)
+		c.Emails = splitEmails(emailsStr)
 		contacts = append(contacts, c)
 	}
 	return contacts, nil
@@ -642,8 +805,10 @@ func ExportSelectedCSV(ids []string) ([]models.Contact, error) {
 		params[i] = id
 	}
 
-	query := fmt.Sprintf("SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes, created_at, updated_at FROM leads WHERE id IN (%s) ORDER BY company ASC",
-		strings.Join(placeholders, ","))
+	query := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s WHERE l.id IN (%s) %s ORDER BY l.company ASC`,
+		leadColsShort, models.EmailsSeparator,
+		leadFromClause, strings.Join(placeholders, ","), leadGroupBy)
 
 	rows, err := db.Query(query, params...)
 	if err != nil {
@@ -654,8 +819,11 @@ func ExportSelectedCSV(ids []string) ([]models.Contact, error) {
 	var contacts []models.Contact
 	for rows.Next() {
 		var c models.Contact
-		rows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Email, &c.Phone, &c.Website,
-			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes, &c.CreatedAt, &c.UpdatedAt)
+		var emailsStr string
+		rows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Phone, &c.Website,
+			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
+			&emailsStr)
+		c.Emails = splitEmails(emailsStr)
 		contacts = append(contacts, c)
 	}
 	return contacts, nil
@@ -742,19 +910,19 @@ func GetReportData(f ContactFilter) (*models.ReportData, error) {
 
 	if f.Search != "" {
 		s := "%" + f.Search + "%"
-		clauses = append(clauses, "(company LIKE ? OR email LIKE ? OR phone LIKE ? OR website LIKE ? OR notes LIKE ? OR contact_name LIKE ?)")
+		clauses = append(clauses, "(l.company LIKE ? OR le.email LIKE ? OR l.phone LIKE ? OR l.website LIKE ? OR l.notes LIKE ? OR l.contact_name LIKE ?)")
 		params = append(params, s, s, s, s, s, s)
 	}
 	if f.Vertical != "" {
-		clauses = append(clauses, "vertical = ?")
+		clauses = append(clauses, "l.vertical = ?")
 		params = append(params, f.Vertical)
 	}
 	if f.Type != "" {
-		clauses = append(clauses, "type = ?")
+		clauses = append(clauses, "l.type = ?")
 		params = append(params, f.Type)
 	}
 	if f.Source != "" {
-		clauses = append(clauses, "source = ?")
+		clauses = append(clauses, "l.source = ?")
 		params = append(params, f.Source)
 	}
 
@@ -763,10 +931,36 @@ func GetReportData(f ContactFilter) (*models.ReportData, error) {
 		where = "WHERE " + strings.Join(clauses, " AND ")
 	}
 
-	var totalCount int
-	db.QueryRow("SELECT COUNT(*) FROM leads "+where, params...).Scan(&totalCount)
+	// Build simple WHERE clauses (without search terms that may reference le.email)
+	// for aggregate stats (totalCount, byVertical, byType, bySource, byPhone, etc.)
+	var simpleClauses []string
+	var simpleParams []any
+	if f.Vertical != "" {
+		simpleClauses = append(simpleClauses, "vertical = ?")
+		simpleParams = append(simpleParams, f.Vertical)
+	}
+	if f.Type != "" {
+		simpleClauses = append(simpleClauses, "type = ?")
+		simpleParams = append(simpleParams, f.Type)
+	}
+	if f.Source != "" {
+		simpleClauses = append(simpleClauses, "source = ?")
+		simpleParams = append(simpleParams, f.Source)
+	}
+	simpleWhere := ""
+	if len(simpleClauses) > 0 {
+		simpleWhere = "WHERE " + strings.Join(simpleClauses, " AND ")
+	}
 
-	contactRows, err := db.Query(fmt.Sprintf("SELECT id, company, contact_name, email, phone, website, type, vertical, source, status, notes FROM leads %s ORDER BY company ASC LIMIT 150", where), params...)
+	var totalCount int
+	db.QueryRow("SELECT COUNT(*) FROM leads "+simpleWhere, simpleParams...).Scan(&totalCount)
+
+	// Contact list query uses the full where (with JOIN for email search support)
+	contactQuery := fmt.Sprintf(`SELECT %s, COALESCE(GROUP_CONCAT(le.email, '%s'), '')
+		%s %s %s ORDER BY l.company ASC LIMIT 150`,
+		leadColsShort, models.EmailsSeparator,
+		leadFromClause, where, leadGroupBy)
+	contactRows, err := db.Query(contactQuery, params...)
 	if err != nil {
 		return nil, err
 	}
@@ -775,18 +969,21 @@ func GetReportData(f ContactFilter) (*models.ReportData, error) {
 	var contacts []models.Contact
 	for contactRows.Next() {
 		var c models.Contact
-		contactRows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Email, &c.Phone, &c.Website,
-			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes)
+		var emailsStr string
+		contactRows.Scan(&c.ID, &c.Company, &c.ContactName, &c.Phone, &c.Website,
+			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
+			&emailsStr)
+		c.Emails = splitEmails(emailsStr)
 		contacts = append(contacts, c)
 	}
 
-	byVerticalRows, _ := db.Query(fmt.Sprintf("SELECT COALESCE(vertical, 'Unknown') as v, COUNT(*) as cnt FROM leads %s GROUP BY v ORDER BY cnt DESC LIMIT 8", where), params...)
+	byVerticalRows, _ := db.Query("SELECT COALESCE(vertical, 'Unknown') as v, COUNT(*) as cnt FROM leads "+simpleWhere+" GROUP BY v ORDER BY cnt DESC LIMIT 8", simpleParams...)
 	byVertical := scanChartItems(byVerticalRows)
 
-	byTypeRows, _ := db.Query(fmt.Sprintf("SELECT COALESCE(type, 'Unknown') as t, COUNT(*) as cnt FROM leads %s GROUP BY t ORDER BY cnt DESC LIMIT 8", where), params...)
+	byTypeRows, _ := db.Query("SELECT COALESCE(type, 'Unknown') as t, COUNT(*) as cnt FROM leads "+simpleWhere+" GROUP BY t ORDER BY cnt DESC LIMIT 8", simpleParams...)
 	byType := scanChartItems(byTypeRows)
 
-	bySourceRows, _ := db.Query(fmt.Sprintf("SELECT COALESCE(source, 'Unknown') as s, COUNT(*) as cnt FROM leads %s GROUP BY s ORDER BY cnt DESC LIMIT 8", where), params...)
+	bySourceRows, _ := db.Query("SELECT COALESCE(source, 'Unknown') as s, COUNT(*) as cnt FROM leads "+simpleWhere+" GROUP BY s ORDER BY cnt DESC LIMIT 8", simpleParams...)
 	bySource := scanChartItems(bySourceRows)
 
 	maxCount := 1
@@ -812,17 +1009,17 @@ func GetReportData(f ContactFilter) (*models.ReportData, error) {
 	}
 
 	var withEmail, withPhone, withWebsite, withSocial int
-	if where != "" {
-		andWhere := where + " AND email IS NOT NULL AND email != ''"
-		db.QueryRow("SELECT COUNT(*) FROM leads "+andWhere, params...).Scan(&withEmail)
-		andWhere = where + " AND phone IS NOT NULL AND phone != ''"
-		db.QueryRow("SELECT COUNT(*) FROM leads "+andWhere, params...).Scan(&withPhone)
-		andWhere = where + " AND website IS NOT NULL AND website != ''"
-		db.QueryRow("SELECT COUNT(*) FROM leads "+andWhere, params...).Scan(&withWebsite)
-		andWhere = where + " AND notes LIKE '%Social:%'"
-		db.QueryRow("SELECT COUNT(*) FROM leads "+andWhere, params...).Scan(&withSocial)
+
+	// Count with email: use lead_emails join (can use full where with le.email references)
+	cleanWhere := strings.ReplaceAll(where, "l.", "")
+	db.QueryRow("SELECT COUNT(DISTINCT le.lead_id) FROM lead_emails le JOIN leads l ON l.id = le.lead_id "+cleanWhere, params...).Scan(&withEmail)
+
+	// Phone/website/social counts use simpleWhere (no search, safe for FROM leads)
+	if simpleWhere != "" {
+		db.QueryRow("SELECT COUNT(*) FROM leads "+simpleWhere+" AND phone IS NOT NULL AND phone != ''", simpleParams...).Scan(&withPhone)
+		db.QueryRow("SELECT COUNT(*) FROM leads "+simpleWhere+" AND website IS NOT NULL AND website != ''", simpleParams...).Scan(&withWebsite)
+		db.QueryRow("SELECT COUNT(*) FROM leads "+simpleWhere+" AND notes LIKE '%Social:%'", simpleParams...).Scan(&withSocial)
 	} else {
-		db.QueryRow("SELECT COUNT(*) FROM leads WHERE email IS NOT NULL AND email != ''").Scan(&withEmail)
 		db.QueryRow("SELECT COUNT(*) FROM leads WHERE phone IS NOT NULL AND phone != ''").Scan(&withPhone)
 		db.QueryRow("SELECT COUNT(*) FROM leads WHERE website IS NOT NULL AND website != ''").Scan(&withWebsite)
 		db.QueryRow("SELECT COUNT(*) FROM leads WHERE notes LIKE '%Social:%'").Scan(&withSocial)
@@ -875,6 +1072,7 @@ func scanChartItems(rows *sql.Rows) []models.ChartItem {
 	return items
 }
 
+// GetContactEmail returns the primary email and company name for a lead.
 func GetContactEmail(id string) (string, string, error) {
 	db, err := GetDB()
 	if err != nil {
@@ -883,9 +1081,40 @@ func GetContactEmail(id string) (string, string, error) {
 	defer db.Close()
 
 	var email, company string
-	err = db.QueryRow("SELECT email, company FROM leads WHERE id = ?", id).Scan(&email, &company)
+	err = db.QueryRow(`
+		SELECT le.email, l.company
+		FROM lead_emails le
+		JOIN leads l ON l.id = le.lead_id
+		WHERE le.lead_id = ?
+		ORDER BY le.is_primary DESC, le.id ASC
+		LIMIT 1`, id).Scan(&email, &company)
 	if err == sql.ErrNoRows {
 		return "", "", nil
 	}
 	return email, company, err
+}
+
+// GetLeadEmails returns all email addresses for a lead.
+func GetLeadEmails(leadID string) ([]string, error) {
+	db, err := GetDB()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(
+		"SELECT email FROM lead_emails WHERE lead_id = ? ORDER BY is_primary DESC, id ASC",
+		leadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var emails []string
+	for rows.Next() {
+		var e string
+		rows.Scan(&e)
+		emails = append(emails, e)
+	}
+	return emails, nil
 }

@@ -27,7 +27,7 @@ type SendResult struct {
 func SendEmail(to, subject, body string, fileData []byte, fileName string) *SendResult {
 	password, err := db.LoadAppPassword()
 	if err != nil || password == "" {
-		return &SendResult{Error: "Gmail app password not found. Run store-password.py first."}
+		return &SendResult{Error: "Gmail app password not found. Run 'crm store-password' first."}
 	}
 
 	if !strings.Contains(to, "@") || strings.Count(to, "@") != 1 {
@@ -58,7 +58,7 @@ func SendEmail(to, subject, body string, fileData []byte, fileName string) *Send
 func SendBulkEmail(emails []string, subject, body string) (int, string) {
 	password, err := db.LoadAppPassword()
 	if err != nil || password == "" {
-		return 0, "Gmail app password not found. Run store-password.py first."
+		return 0, "Gmail app password not found. Run 'crm store-password' first."
 	}
 
 	var validEmails []string

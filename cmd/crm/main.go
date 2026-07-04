@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -65,6 +66,8 @@ func main() {
 		runSendTelegram()
 	case "send-mail":
 		runSendMail(args)
+	case "campaign":
+		runCampaign(args)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -99,6 +102,9 @@ Usage:
     crm send-mail                 Send BCC email via Gmail SMTP
     crm send-mail --emails "a@b.com" --subject "Hi" --body "Hello" \\
     crm send-mail --body-file body.txt --attach file.pdf --confirm
+    crm campaign                  Send segmented campaign to leads
+    crm campaign --tier 1 --subject "Hi" --body "Hello"
+    crm campaign --type "Intelligence" --vertical "USA" --dry-run
 	`)
 }
 
@@ -242,7 +248,15 @@ func runAdd() {
 	}
 
 	input.ContactName = readLine(reader, "  Contact name: ")
-	input.Email = readLine(reader, "  Email: ")
+	emailsStr := readLine(reader, "  Emails (comma-separated): ")
+	if emailsStr != "" {
+		for _, e := range strings.Split(emailsStr, ",") {
+			e = strings.TrimSpace(e)
+			if e != "" {
+				input.Emails = append(input.Emails, e)
+			}
+		}
+	}
 	input.Phone = readLine(reader, "  Phone: ")
 	input.Website = readLine(reader, "  Website: ")
 
@@ -304,7 +318,7 @@ func runUpdate(args []string) {
 	}{
 		{"company", lead.Company},
 		{"contact_name", lead.ContactName},
-		{"email", lead.Email},
+		{"emails", strings.Join(lead.Emails, ", ")},
 		{"phone", lead.Phone},
 		{"website", lead.Website},
 		{"tier", lead.Tier},
@@ -620,6 +634,281 @@ func runSendMail(args []string) {
 	for _, r := range recipients {
 		db.LogEmail("", r, *subject, bodyText, "sent", "")
 	}
+}
+
+// ─── Campaign ───────────────────────────────────────────────────────────────
+
+func runCampaign(args []string) {
+	fs := newFlagSet("campaign")
+	tier := fs.String("tier", "", "Filter by tier (1=VC, 2=Corporate, 3=Local)")
+	ctype := fs.String("type", "", "Filter by organization type")
+	vertical := fs.String("vertical", "", "Filter by vertical/country")
+	status := fs.String("status", "cold", "Filter by status (default: cold)")
+	subject := fs.String("subject", "", "Email subject line (required)")
+	body := fs.String("body", "", "Email body text (required unless --body-file used)")
+	bodyFile := fs.String("body-file", "", "Read email body from a text file")
+	fromName := fs.String("from-name", "John Victor @ WaterParty", "Sender display name")
+	dryRun := fs.Bool("dry-run", false, "Preview the campaign without sending")
+	confirm := fs.Bool("confirm", false, "Show full segment summary and ask for confirmation")
+	noStatusUpdate := fs.Bool("no-status-update", false, "Don't auto-update status to 'contacted'")
+	fs.Parse(args)
+
+	// Validate required flags
+	if *subject == "" {
+		fmt.Fprintln(os.Stderr, "❌ --subject is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+	if *body == "" && *bodyFile == "" {
+		fmt.Fprintln(os.Stderr, "❌ Either --body or --body-file is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+	if *body != "" && *bodyFile != "" {
+		fmt.Fprintln(os.Stderr, "❌ Use either --body or --body-file, not both")
+		os.Exit(1)
+	}
+
+	// Read body content
+	bodyText := *body
+	if *bodyFile != "" {
+		data, err := os.ReadFile(*bodyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Cannot read body file '%s': %v\n", *bodyFile, err)
+			os.Exit(1)
+		}
+		bodyText = string(data)
+	}
+
+	// Query leads matching the segment filter
+	f := db.LeadFilter{
+		Tier:     *tier,
+		Status:   *status,
+		Vertical: *vertical,
+		Type:     *ctype,
+	}
+
+	leads, err := db.GetLeads(f)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error querying leads: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Collect emails and segment stats
+	var emailable []models.Contact
+	emailSet := make(map[string]bool)
+	var duplicateCount, noEmailCount int
+	typeCount := make(map[string]int)
+	tierCount := make(map[string]int)
+
+	for _, lead := range leads {
+		typeCount[lead.Type]++
+		tierCount[lead.Tier]++
+
+		// Use the primary (first) email for campaign sending
+		email := ""
+		if len(lead.Emails) > 0 {
+			email = strings.TrimSpace(lead.Emails[0])
+		}
+		if email == "" || strings.EqualFold(email, "none") {
+			noEmailCount++
+			continue
+		}
+		if !strings.Contains(email, "@") || strings.Count(email, "@") != 1 {
+			noEmailCount++
+			continue
+		}
+		parts := strings.Split(email, "@")
+		if len(parts) != 2 || !strings.Contains(parts[1], ".") {
+			noEmailCount++
+			continue
+		}
+
+		if emailSet[email] {
+			duplicateCount++
+			continue
+		}
+		emailSet[email] = true
+		emailable = append(emailable, lead)
+	}
+
+	// Show campaign summary
+	tierLabel := *tier
+	if l, ok := models.TierLabels[*tier]; ok {
+		tierLabel = l
+	}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("═", 58))
+	fmt.Println("  📬 CAMPAIGN SEGMENT SUMMARY")
+	fmt.Println(strings.Repeat("═", 58))
+
+	// Filter description
+	var filterParts []string
+	if *tier != "" {
+		filterParts = append(filterParts, fmt.Sprintf("Tier: %s", tierLabel))
+	}
+	if *ctype != "" {
+		filterParts = append(filterParts, fmt.Sprintf("Type: %s", *ctype))
+	}
+	if *vertical != "" {
+		filterParts = append(filterParts, fmt.Sprintf("Vertical: %s", *vertical))
+	}
+	if *status != "" {
+		filterParts = append(filterParts, fmt.Sprintf("Status: %s", *status))
+	}
+	filterDesc := "All leads"
+	if len(filterParts) > 0 {
+		filterDesc = strings.Join(filterParts, " | ")
+	}
+	fmt.Printf("  Filter: %s\n", filterDesc)
+	fmt.Printf("  Total in segment:    %d leads\n", len(leads))
+	fmt.Printf("  With valid email:    %d\n", len(emailable))
+	fmt.Printf("  Without email:       %d\n", noEmailCount)
+	if duplicateCount > 0 {
+		fmt.Printf("  Duplicate emails:    %d\n", duplicateCount)
+	}
+
+	// Show type breakdown
+	fmt.Println()
+	fmt.Println("  Segment Composition:")
+	for _, t := range sortedKeys(typeCount) {
+		pct := typeCount[t] * 100 / len(leads)
+		fmt.Printf("    %-20s %3d (%d%%)\n", t, typeCount[t], pct)
+	}
+
+	// Show tier breakdown
+	fmt.Println()
+	fmt.Println("  By Tier:")
+	for _, t := range sortedKeys(tierCount) {
+		label := t
+		if l, ok := models.TierLabels[t]; ok {
+			label = l
+		}
+		pct := tierCount[t] * 100 / len(leads)
+		fmt.Printf("    %-12s %3d (%d%%)\n", label, tierCount[t], pct)
+	}
+
+	// Sample recipients
+	if len(emailable) > 0 {
+		fmt.Println()
+		fmt.Printf("  First 5 recipients:\n")
+		max := 5
+		if len(emailable) < max {
+			max = len(emailable)
+		}
+		for _, lead := range emailable[:max] {
+			shortID := lead.ID
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			// Display primary email for this lead
+			displayEmail := ""
+			if len(lead.Emails) > 0 {
+				displayEmail = lead.Emails[0]
+			}
+			fmt.Printf("    • [%s] %-30s %s\n", shortID, lead.Company, displayEmail)
+		}
+		if len(emailable) > 5 {
+			fmt.Printf("    • ... and %d more\n", len(emailable)-5)
+		}
+	}
+
+	// Subject and body preview
+	fmt.Println()
+	fmt.Printf("  Subject: %s\n", *subject)
+	preview := strings.ReplaceAll(bodyText, "\n", " ")
+	if len(preview) > 100 {
+		preview = preview[:100]
+	}
+	fmt.Printf("  Body preview: %s...\n", preview)
+
+	if len(emailable) == 0 {
+		fmt.Println()
+		fmt.Println("⚠️  No leads with valid email addresses in this segment.")
+		fmt.Println("   Use --dry-run to see the full breakdown, or adjust your filter.")
+		os.Exit(0)
+	}
+
+	// Dry run
+	if *dryRun {
+		fmt.Println()
+		fmt.Println("🔍 DRY RUN — No emails sent. Use --confirm to send.")
+		return
+	}
+
+	// Confirm mode: ask before sending
+	if *confirm {
+		fmt.Println()
+		fmt.Printf("📧 Ready to send to %d recipients via BCC.\n", len(emailable))
+		if !*noStatusUpdate {
+			fmt.Printf("   Status will be updated from '%s' to 'contacted'.\n", *status)
+		}
+		fmt.Println()
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("  Send now? (y/N): ")
+		ans, _ := reader.ReadString('\n')
+		if strings.TrimSpace(strings.ToLower(ans)) != "y" {
+			fmt.Println("❌ Campaign cancelled.")
+			os.Exit(0)
+		}
+		fmt.Println()
+	}
+
+	// Extract just the email addresses for sending
+	emails := make([]string, len(emailable))
+	for i, lead := range emailable {
+		if len(lead.Emails) > 0 {
+			emails[i] = strings.TrimSpace(lead.Emails[0])
+		}
+	}
+
+	// Send
+	fmt.Printf("📨 Sending campaign to %d recipients...\n", len(emails))
+	result := mail.SendMailCLI(emails, *subject, bodyText, *fromName, nil)
+	if !result.Success {
+		fmt.Fprintf(os.Stderr, "❌ %s\n", result.Error)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Campaign sent to %d recipients\n", result.Count)
+	fmt.Printf("   Subject: %s\n", *subject)
+
+	// Log every email sent and update statuses
+	updated := 0
+	for _, lead := range emailable {
+		sentEmail := ""
+		if len(lead.Emails) > 0 {
+			sentEmail = lead.Emails[0]
+		}
+		db.LogEmail(lead.ID, sentEmail, *subject, bodyText, "sent", "")
+
+		if !*noStatusUpdate && lead.Status != "contacted" {
+			_ = db.UpdateLead(lead.ID, map[string]string{
+				"status": "contacted",
+			})
+			updated++
+		}
+	}
+
+	if updated > 0 {
+		fmt.Printf("   Status updated to 'contacted' for %d leads\n", updated)
+	}
+	fmt.Println()
+	fmt.Println("📋 Next steps:")
+	fmt.Println("   1. Track replies: crm list --status replied")
+	fmt.Println("   2. Log follow-ups: crm log <id>")
+	fmt.Println("   3. View due follow-ups: crm followups")
+}
+
+// sortedKeys returns map keys sorted alphabetically (for deterministic output)
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ─── Store Password ────────────────────────────────────────────────────────
@@ -998,37 +1287,44 @@ func importCSV(path string) (int, error) {
 		}
 
 		contactName := get(row, "Contact Name", "Contact")
-		email := get(row, "Email", "Contact Email")
-		phone := get(row, "Phone")
-		website := get(row, "Website")
-		vertical := get(row, "Vertical")
-		checkSize := get(row, "Check Size")
-		pitchAngle := get(row, "Our Angle", "Pitch Angle")
-		nextAction := get(row, "Next Action")
-		emailSent := get(row, "Email Sent", "Email Sent (Date)")
-		notes := get(row, "Notes")
-
-		_, err = db.AddLead(models.LeadInput{
-			Company:        company,
-			ContactName:    contactName,
-			Email:          email,
-			Phone:          phone,
-			Website:        website,
-			Tier:           tier,
-			Type:           orgType,
-			Vertical:       vertical,
-			CheckSize:      checkSize,
-			PitchAngle:     pitchAngle,
-			Status:         "cold",
-			NextAction:     nextAction,
-			NextActionDate: emailSent,
-			Notes:          notes,
-			Source:         "csv_import",
-		})
-		if err != nil {
-			fmt.Printf("  Error importing '%s': %v\n", company, err)
-			continue
+	emailRaw := get(row, "Email", "Contact Email")
+	var emails []string
+	for _, e := range strings.Split(emailRaw, ",") {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			emails = append(emails, e)
 		}
+	}
+	phone := get(row, "Phone")
+	website := get(row, "Website")
+	vertical := get(row, "Vertical")
+	checkSize := get(row, "Check Size")
+	pitchAngle := get(row, "Our Angle", "Pitch Angle")
+	nextAction := get(row, "Next Action")
+	emailSent := get(row, "Email Sent", "Email Sent (Date)")
+	notes := get(row, "Notes")
+
+	_, err = db.AddLead(models.LeadInput{
+		Company:        company,
+		ContactName:    contactName,
+		Emails:         emails,
+		Phone:          phone,
+		Website:        website,
+		Tier:           tier,
+		Type:           orgType,
+		Vertical:       vertical,
+		CheckSize:      checkSize,
+		PitchAngle:     pitchAngle,
+		Status:         "cold",
+		NextAction:     nextAction,
+		NextActionDate: emailSent,
+		Notes:          notes,
+		Source:         "csv_import",
+	})
+	if err != nil {
+		fmt.Printf("  Error importing '%s': %v\n", company, err)
+		continue
+	}
 		imported++
 	}
 
@@ -1072,7 +1368,7 @@ func runExport(args []string) {
 
 	for _, lead := range leads {
 		writer.Write([]string{
-			lead.ID, lead.Company, lead.ContactName, lead.Email,
+			lead.ID, lead.Company, lead.ContactName, strings.Join(lead.Emails, ", "),
 			lead.Phone, lead.Website, lead.Tier, lead.Type, lead.Vertical,
 			lead.CheckSize, lead.PitchAngle, lead.Status, lead.NextAction,
 			lead.NextActionDate, lead.Notes, lead.Source,
@@ -1102,8 +1398,13 @@ func printLead(lead models.Contact, verbose bool) {
 		tierLabel = l
 	}
 
+	emailsStr := "-"
+	if len(lead.Emails) > 0 {
+		emailsStr = strings.Join(lead.Emails, ", ")
+	}
+
 	fmt.Printf("  [%s] %s\n", shortID, lead.Company)
-	fmt.Printf("         Contact: %s  |  %s\n", defaultStr(lead.ContactName, "-"), defaultStr(lead.Email, "-"))
+	fmt.Printf("         Contact: %s  |  %s\n", defaultStr(lead.ContactName, "-"), emailsStr)
 	fmt.Printf("         Tier: %s  |  Type: %s  |  Vertical: %s\n", tierLabel, defaultStr(lead.Type, "-"), defaultStr(lead.Vertical, "-"))
 	fmt.Printf("         Status: %s  |  Check: %s\n", lead.Status, defaultStr(lead.CheckSize, "-"))
 	if lead.NextAction != "" {

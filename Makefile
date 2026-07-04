@@ -1,5 +1,4 @@
-.PHONY: all crm dashboard run-crm run-dashboard vet clean help migrate setup-dashboard \
-        send-mail store-password run-python-dashboard
+.PHONY: all crm dashboard run-crm run-dashboard vet clean help
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 # These variables can be overridden:  make CGO_ENABLED=0
@@ -56,7 +55,7 @@ clean:
 
 # Show help
 help:
-	@echo "WaterParty CRM — Makefile"
+	@echo "Counter-Terrorism Initiative — Makefile"
 	@echo ""
 	@echo "Targets:"
 	@echo "  make              Build both crm.exe + dashboard.exe (default)"
@@ -64,8 +63,6 @@ help:
 	@echo "  make dashboard    Build dashboard.exe web server only"
 	@echo "  make run-crm ARGS=\"stats\"   Run CRM via 'go run'"
 	@echo "  make run-dashboard          Run dashboard via 'go run'"
-	@echo "  make migrate              Migrate databases to SQLCipher v4 format"
-	@echo "  make migrate-dry-run      Preview migration without making changes"
 	@echo "  make vet                   Run go vet on all packages"
 	@echo "  make clean                 Remove built binaries"
 	@echo "  make help                  Show this help"
@@ -75,23 +72,6 @@ help:
 	@echo "  CGO_ENABLED=0    Disable CGO (only for pure-Go builds)"
 	@echo "  ARGS=\"stats\"     Arguments passed to run-crm"
 	@echo ""
-
-# ─── Database Migration ──────────────────────────────────────────────────────
-
-# Migrate SQLCipher databases from v3 to v4 format for Go compatibility
-# This is a one-time migration per database. Backups saved as .db.bak
-migrate:
-	@echo "🌐 Migrating databases to SQLCipher v4 format..."
-	python python/migrate-db.py
-	@echo ""
-	@echo "✅ Migration complete. Databases are now in v4 format."
-	@echo "   Run 'make' to rebuild Go binaries with the updated databases."
-
-migrate-dry-run:
-	@echo "🔍 Dry run — previewing migration..."
-	python python/migrate-db.py --dry-run --verbose
-	@echo ""
-	@echo "🔍 Dry run complete. Run 'make migrate' to apply changes."
 
 # ─── CGO Note ───────────────────────────────────────────────────────────────
 # SQLCipher encryption requires CGO. If 'gcc' is not installed, run in

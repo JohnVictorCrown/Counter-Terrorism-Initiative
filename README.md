@@ -1,6 +1,6 @@
 # WaterParty CRM — Counter-Terrorism Initiative
 
-A CRM system for lead management, outreach tracking, and email campaigns, with an encrypted SQLite database backend. Available as a **Go CLI**, a **Go web dashboard**, and **Python scripts**.
+A CRM system for lead management, outreach tracking, and email campaigns, with an encrypted SQLite database backend. Available as a **Go CLI** and a **Go web dashboard**.
 
 ## 📁 Project Structure
 
@@ -14,24 +14,17 @@ A CRM system for lead management, outreach tracking, and email campaigns, with a
 │   ├── mail/         # SMTP email sending
 │   ├── models/       # Data models
 │   └── social/       # Social media parser
-├── python/           # Python scripts (alternative to Go)
-│   ├── app.py        # Flask web dashboard
-│   ├── crm.py        # Python CRM CLI
-│   ├── send-mail.py  # Send BCC emails
-│   └── store-password.py  # Store Gmail app password
 ├── databases/
 │   ├── leads.db      # Encrypted CRM database (SQLCipher AES-256)
 │   └── mail-credentials.db  # Encrypted mail credentials
 ├── templates/        # HTML templates for the dashboard
-├── static/           # Static assets (CSS, JS)
+├── static/           # Static assets (CSS)
 ├── .env              # Environment variables (EMAIL_DB_PASSWORD, etc.)
 ├── Makefile          # Build automation
 └── README.md         # This file
 ```
 
 ## 🔐 Requirements
-
-### Go Binaries (recommended)
 
 - **Go 1.25+** — [go.dev/dl](https://go.dev/dl)
 - **GCC (MinGW-w64)** — Required for SQLCipher CGO support
@@ -45,18 +38,6 @@ A CRM system for lead management, outreach tracking, and email campaigns, with a
   ```
 
   Or download from: [MinGW-w64](https://github.com/niXman/mingw-builds-binaries/releases)
-
-### Python Scripts (alternative)
-
-- **Python 3.10+**
-- **SQLCipher** — Install with:
-  ```powershell
-  pip install sqlcipher3
-  ```
-- Flask (for dashboard only):
-  ```powershell
-  pip install flask
-  ```
 
 ## 🚀 Quick Start
 
@@ -155,16 +136,6 @@ go run ./cmd/dashboard/
 .\crm.exe run-dashboard
 ```
 
-### Python Scripts (alternative)
-
-Run from the project root:
-```powershell
-python python/crm.py stats              # CRM stats
-python python/app.py                    # Flask dashboard at http://localhost:5000
-python python/store-password.py          # Store Gmail app password
-python python/send-mail.py --emails "a@b.com" --subject "Hi" --body "Hello"
-```
-
 ## 🔧 Makefile Commands
 
 ```powershell
@@ -190,10 +161,9 @@ make CGO_ENABLED=0    # Disable CGO (pure-Go only, no DB decryption)
 Both `leads.db` and `mail-credentials.db` are **SQLCipher AES-256 encrypted** SQLite databases. They are stored in the `databases/` folder.
 
 - **Encryption key**: `EMAIL_DB_PASSWORD` from `.env` file
-- **Cipher**: AES-256-CBC (SQLCipher v3 compatible)
-- **KDF**: PBKDF2-HMAC-SHA1, 64000 iterations
+- **Cipher**: AES-256-CBC (SQLCipher v4, SHA512/256K KDF iterations)
 
-The databases were created by Python's `sqlcipher3` library (SQLCipher v3). When opening with Go's `go-sqlcipher/v4`, it must first set `PRAGMA cipher_compatibility = 3` before setting the encryption key.
+All database access is handled through the Go CLI (`crm.exe`). No Python dependencies required.
 
 ## 🐛 Troubleshooting
 
@@ -215,7 +185,7 @@ $env:CGO_ENABLED=1; go build -o crm.exe ./cmd/crm/
 2. Ensure `.env` has the correct `EMAIL_DB_PASSWORD`
 3. Verify `databases/leads.db` exists and has data:
    ```powershell
-   python -c "import sqlcipher3; pw=open('.env').read().split('EMAIL_DB_PASSWORD=')[1].split()[0].strip(); conn=sqlcipher3.connect('databases/leads.db'); conn.execute('PRAGMA key=\"x\\'%s\\'\"' % pw.encode().hex()); print(conn.execute('SELECT COUNT(*) FROM leads').fetchone()[0], 'leads'); conn.close()"
+   .\crm.exe stats
    ```
 4. Kill any old dashboard process and restart:
    ```powershell
@@ -225,7 +195,7 @@ $env:CGO_ENABLED=1; go build -o crm.exe ./cmd/crm/
 
 ### "file is not a database" / HMAC check failed
 
-The encryption password in `.env` may not match the one used to create the database, or the database was created by a different version of SQLCipher. Recreate the database from the Python scripts.
+The encryption password in `.env` may not match the one used to create the database. Ensure `EMAIL_DB_PASSWORD` in `.env` matches what was used to encrypt the databases.
 
 ## 📬 Sending Email via Gmail
 

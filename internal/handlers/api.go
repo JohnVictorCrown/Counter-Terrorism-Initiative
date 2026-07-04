@@ -103,7 +103,7 @@ func ExportCSV(c *fiber.Ctx) error {
 
 	for _, contact := range contacts {
 		writer.Write([]string{
-			contact.ID, contact.Company, contact.ContactName, contact.Email,
+			contact.ID, contact.Company, contact.ContactName, strings.Join(contact.Emails, ", "),
 			contact.Phone, contact.Website, contact.Type, contact.Vertical,
 			contact.Source, contact.Status, contact.Notes, contact.CreatedAt, contact.UpdatedAt,
 		})
@@ -152,7 +152,7 @@ func ExportSelectedCSV(c *fiber.Ctx) error {
 
 	for _, contact := range contacts {
 		writer.Write([]string{
-			contact.ID, contact.Company, contact.ContactName, contact.Email,
+			contact.ID, contact.Company, contact.ContactName, strings.Join(contact.Emails, ", "),
 			contact.Phone, contact.Website, contact.Type, contact.Vertical,
 			contact.Source, contact.Status, contact.Notes, contact.CreatedAt, contact.UpdatedAt,
 		})
@@ -167,7 +167,7 @@ func ExportSelectedCSV(c *fiber.Ctx) error {
 }
 
 func SendEmail(c *fiber.Ctx) error {
-	// Accept both JSON and form-data (for file attachments), like Flask's request.get_json() or request.form
+	// Accept both JSON and form-data (for file attachments)
 	var contactID, subject, body, customEmail string
 	var fileData []byte
 	var fileName string

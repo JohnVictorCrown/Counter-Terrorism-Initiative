@@ -1,5 +1,8 @@
 package models
 
+// EmailsString is the separator used when encoding/decoding emails in GROUP_CONCAT
+const EmailsSeparator = "||"
+
 type SocialEntry struct {
 	Platform string `json:"platform"`
 	Icon     string `json:"icon"`
@@ -36,7 +39,7 @@ var TierLabels = map[string]string{
 type LeadInput struct {
 	Company        string
 	ContactName    string
-	Email          string
+	Emails         []string
 	Phone          string
 	Website        string
 	Tier           string
@@ -55,7 +58,7 @@ type Contact struct {
 	ID             string        `json:"id"`
 	Company        string        `json:"company"`
 	ContactName    string        `json:"contact_name"`
-	Email          string        `json:"email"`
+	Emails         []string      `json:"emails"`
 	Phone          string        `json:"phone"`
 	Website        string        `json:"website"`
 	Tier           string        `json:"tier"`
