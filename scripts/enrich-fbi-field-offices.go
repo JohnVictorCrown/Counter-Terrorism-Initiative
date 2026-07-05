@@ -358,18 +358,22 @@ func parseOffices(htmlContent string) ([]FieldOffice, error) {
 	var result []FieldOffice
 	for _, m := range matches {
 		var cityKey string
+		// Priority 1: subdomain regex (e.g., "losangeles" from "losangeles.fbi.gov")
 		if m.subdomain.url != "" {
 			if sub := subRe.FindStringSubmatch(m.subdomain.url); len(sub) > 1 {
 				cityKey = sub[1]
 			}
 		}
-		if cityKey == "" {
-			cityKey = normalizeCityKey(m.office.name)
-		}
+		// Priority 2: URL path (e.g., "losangeles" from /contact-us/field-offices/losangeles)
+		// Run BEFORE name normalization to avoid "losangeles.fbi.gov" → "losangelesfbigov"
 		if cityKey == "" {
 			if matchURL := officeRe.FindStringSubmatch(m.office.url); len(matchURL) > 1 {
 				cityKey = strings.ReplaceAll(matchURL[1], "-", "")
 			}
+		}
+		// Priority 3: normalize office name as fallback
+		if cityKey == "" {
+			cityKey = normalizeCityKey(m.office.name)
 		}
 
 		officeURL := m.office.url
@@ -590,7 +594,7 @@ func normalizeCityKey(name string) string {
 // queryDBFBILeads queries the database for FBI leads without emails.
 func queryDBFBILeads(db *sql.DB) []DBLead {
 	rows, err := db.Query(`
-		SELECT l.id, l.company, COALESCE(l.type,''), COALESCE(l.phone,'')
+		SELECT COALESCE(l.id,''), l.company, COALESCE(l.type,''), COALESCE(l.phone,'')
 		FROM leads l LEFT JOIN lead_emails le ON le.lead_id = l.id
 		WHERE l.vertical IN ('USA','United States')
 		AND l.company LIKE '%FBI%'
@@ -607,6 +611,9 @@ func queryDBFBILeads(db *sql.DB) []DBLead {
 		var ld DBLead
 		if err := rows.Scan(&ld.ID, &ld.Company, &ld.OrgType, &ld.Phone); err != nil {
 			continue
+		}
+		if ld.ID == "" {
+			continue // skip leads without valid primary keys
 		}
 		city := strings.TrimPrefix(ld.Company, "FBI - ")
 		city = strings.TrimSuffix(city, " Field Office")
