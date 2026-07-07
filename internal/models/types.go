@@ -58,7 +58,8 @@ type Contact struct {
 	ID             string        `json:"id"`
 	Company        string        `json:"company"`
 	ContactName    string        `json:"contact_name"`
-	Emails         []string      `json:"emails"`
+	Emails         []string      `json:"emails,omitempty"`
+	Email          string        `json:"email"`
 	Phone          string        `json:"phone"`
 	Website        string        `json:"website"`
 	Tier           string        `json:"tier"`

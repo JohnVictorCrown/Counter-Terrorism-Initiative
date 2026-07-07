@@ -200,6 +200,9 @@ func GetContact(id string) (*models.Contact, error) {
 		return nil, err
 	}
 	c.Emails = splitEmails(emailsStr)
+	if len(c.Emails) > 0 {
+		c.Email = c.Emails[0]
+	}
 	return &c, nil
 }
 
@@ -278,6 +281,9 @@ func ListContacts(f ContactFilter) ([]models.Contact, int, error) {
 			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
 			&emailsStr)
 		c.Emails = splitEmails(emailsStr)
+		if len(c.Emails) > 0 {
+			c.Email = c.Emails[0]
+		}
 		contacts = append(contacts, c)
 	}
 
@@ -673,6 +679,9 @@ func scanContacts(rows *sql.Rows) []models.Contact {
 			&emailsStr,
 		)
 		c.Emails = splitEmails(emailsStr)
+		if len(c.Emails) > 0 {
+			c.Email = c.Emails[0]
+		}
 		contacts = append(contacts, c)
 	}
 	return contacts
@@ -782,6 +791,9 @@ func ExportCSV(f ContactFilter) ([]models.Contact, error) {
 			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
 			&emailsStr)
 		c.Emails = splitEmails(emailsStr)
+		if len(c.Emails) > 0 {
+			c.Email = c.Emails[0]
+		}
 		contacts = append(contacts, c)
 	}
 	return contacts, nil
@@ -824,6 +836,9 @@ func ExportSelectedCSV(ids []string) ([]models.Contact, error) {
 			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
 			&emailsStr)
 		c.Emails = splitEmails(emailsStr)
+		if len(c.Emails) > 0 {
+			c.Email = c.Emails[0]
+		}
 		contacts = append(contacts, c)
 	}
 	return contacts, nil
@@ -974,6 +989,9 @@ func GetReportData(f ContactFilter) (*models.ReportData, error) {
 			&c.Type, &c.Vertical, &c.Source, &c.Status, &c.Notes,
 			&emailsStr)
 		c.Emails = splitEmails(emailsStr)
+		if len(c.Emails) > 0 {
+			c.Email = c.Emails[0]
+		}
 		contacts = append(contacts, c)
 	}
 
