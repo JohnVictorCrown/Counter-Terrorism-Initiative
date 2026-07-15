@@ -61,15 +61,24 @@ func SendBulkEmail(emails []string, subject, body string) (int, string) {
 		return 0, "Gmail app password not found. Run 'crm store-password' first."
 	}
 
+	// Deduplicate using a map (case-insensitive)
+	seen := make(map[string]bool)
 	var validEmails []string
 	for _, e := range emails {
 		e = strings.TrimSpace(e)
-		if strings.Count(e, "@") == 1 {
-			parts := strings.Split(e, "@")
-			if strings.Contains(parts[1], ".") {
-				validEmails = append(validEmails, e)
-			}
+		if e == "" || !strings.Contains(e, "@") || strings.Count(e, "@") != 1 {
+			continue
 		}
+		parts := strings.Split(e, "@")
+		if !strings.Contains(parts[1], ".") {
+			continue
+		}
+		lower := strings.ToLower(e)
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		validEmails = append(validEmails, e)
 	}
 
 	if len(validEmails) == 0 {

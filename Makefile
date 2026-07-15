@@ -53,7 +53,33 @@ clean:
 	-rm -f crm.exe dashboard.exe
 	@echo "✅ Cleaned"
 
-# Show help
+# ─── Enrichment Pipeline ─────────────────────────────────────────────────
+
+# Run the full FBI enrichment pipeline (scrape + match + deep + apply)
+#   make enrich         # Apply updates to database
+#   make enrich DRY=1   # Preview only, no changes
+enrich:
+	@if [ "$(DRY)" = "1" ]; then \
+		echo "🔍 Dry-run mode (use make enrich to apply)"; \
+		bash scripts/run-enrichment-pipeline.sh --dry-run; \
+	else \
+		bash scripts/run-enrichment-pipeline.sh; \
+	fi
+
+# Run only the field office scrape (no DB changes)
+scrape:
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) run scripts/enrich-fbi-field-offices.go
+
+# Run only the deep enrichment (no DB changes)
+deepen:
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) run scripts/enrich-fbi-deep.go
+
+# Apply FBI email updates directly to database
+apply-fbi:
+	@CGO_ENABLED=$(CGO_ENABLED) $(GO) run scripts/apply-fbi-enrichment.go --apply
+
+# ─── Show help ──────────────────────────────────────────────────────────────
+
 help:
 	@echo "Counter-Terrorism Initiative — Makefile"
 	@echo ""

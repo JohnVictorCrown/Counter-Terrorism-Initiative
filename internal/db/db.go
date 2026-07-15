@@ -577,7 +577,7 @@ func GetStats() (*models.Stats, error) {
 	defer db.Close()
 
 	var total int
-	db.QueryRow("SELECT COUNT(*) FROM leads").Scan(&total)
+	db.QueryRow("SELECT COUNT(*) FROM (SELECT id FROM leads GROUP BY id)").Scan(&total)
 
 	byTier := scanNameCount(db, "SELECT tier, COUNT(*) FROM leads GROUP BY tier ORDER BY tier")
 	byStatus := scanNameCount(db, "SELECT status, COUNT(*) FROM leads GROUP BY status ORDER BY COUNT(*) DESC")
