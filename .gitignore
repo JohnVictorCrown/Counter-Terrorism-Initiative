@@ -22,3 +22,6 @@ databases/*.bak
 *.exe
 dashboard.exe
 *.exe
+*.exe
+dashboard.exe
+crm.exe

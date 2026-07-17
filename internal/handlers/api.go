@@ -258,36 +258,19 @@ func SendBulkEmail(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Subject and body are required"})
 	}
 
-	// Deduplicate emails before sending (case-insensitive)
-	seen := make(map[string]bool)
-	var uniqueEmails []string
-	for _, e := range req.Emails {
-		e = strings.TrimSpace(e)
-		if e == "" {
-			continue
-		}
-		lower := strings.ToLower(e)
-		if seen[lower] {
-			continue
-		}
-		seen[lower] = true
-		uniqueEmails = append(uniqueEmails, e)
-	}
-
-	sent, errMsg := mail.SendBulkEmail(uniqueEmails, req.Subject, req.Body)
+	sent, batches, errMsg := mail.SendBulkEmail(req.Emails, req.Subject, req.Body)
 	if errMsg != "" {
 		return c.Status(500).JSON(fiber.Map{"error": errMsg})
 	}
 
 	go func() {
-		for _, email := range uniqueEmails {
-			db.LogEmail("", email, req.Subject, req.Body, "sent", "")
-		}
+		db.LogEmail("", "(bulk)", req.Subject, req.Body, "sent", "")
 	}()
 
 	return c.JSON(fiber.Map{
 		"success": true,
 		"sent":    sent,
+		"batches": batches,
 		"subject": req.Subject,
 	})
 }

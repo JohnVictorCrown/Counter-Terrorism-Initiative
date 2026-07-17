@@ -78,7 +78,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`WaterParty CRM — Go CLI for lead management & outreach tracking.
+	fmt.Println(`CRM — Go CLI for lead management & outreach tracking.
 
 Usage:
     crm stats                     Dashboard overview
@@ -487,7 +487,7 @@ func runSendMail(args []string) {
 	body := fs.String("body", "", "Email body text (required unless --body-file used)")
 	bodyFile := fs.String("body-file", "", "Read email body from a text file")
 	attach := fs.String("attach", "", "File to attach (comma-separated for multiple)")
-	fromName := fs.String("from-name", "John Victor @ WaterParty", "Sender display name")
+	fromName := fs.String("from-name", "John Victor @ CRM", "Sender display name")
 	dryRun := fs.Bool("dry-run", false, "Print what would be sent without actually sending")
 	confirm := fs.Bool("confirm", false, "Show recipients and ask for confirmation before sending")
 	fs.Parse(args)
@@ -524,14 +524,21 @@ func runSendMail(args []string) {
 		bodyText = string(data)
 	}
 
-	// Parse recipients
+	// Parse recipients and deduplicate (case-insensitive)
 	recipients := strings.Split(*emailsStr, ",")
+	seen := make(map[string]bool)
 	var cleaned []string
 	for _, r := range recipients {
 		r = strings.TrimSpace(r)
-		if r != "" {
-			cleaned = append(cleaned, r)
+		if r == "" {
+			continue
 		}
+		lower := strings.ToLower(r)
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		cleaned = append(cleaned, r)
 	}
 	recipients = cleaned
 
@@ -627,7 +634,11 @@ func runSendMail(args []string) {
 	if len(attachments) > 0 {
 		attachInfo = fmt.Sprintf(" with %d attachment(s)", len(attachments))
 	}
-	fmt.Printf("✅ Email sent to %d recipients via BCC%s\n", result.Count, attachInfo)
+	batchInfo := ""
+	if result.Batches > 1 {
+		batchInfo = fmt.Sprintf(" (%d batches)", result.Batches)
+	}
+	fmt.Printf("✅ Email sent to %d recipients via BCC%s%s\n", result.Count, batchInfo, attachInfo)
 	fmt.Printf("   Subject: %s\n", *subject)
 
 	// Log to outreach_log
@@ -647,7 +658,7 @@ func runCampaign(args []string) {
 	subject := fs.String("subject", "", "Email subject line (required)")
 	body := fs.String("body", "", "Email body text (required unless --body-file used)")
 	bodyFile := fs.String("body-file", "", "Read email body from a text file")
-	fromName := fs.String("from-name", "John Victor @ WaterParty", "Sender display name")
+	fromName := fs.String("from-name", "John Victor @ CRM", "Sender display name")
 	dryRun := fs.Bool("dry-run", false, "Preview the campaign without sending")
 	confirm := fs.Bool("confirm", false, "Show full segment summary and ask for confirmation")
 	noStatusUpdate := fs.Bool("no-status-update", false, "Don't auto-update status to 'contacted'")
@@ -877,7 +888,11 @@ func runCampaign(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Campaign sent to %d recipients\n", result.Count)
+	batchInfo := ""
+	if result.Batches > 1 {
+		batchInfo = fmt.Sprintf(" (%d batches)", result.Batches)
+	}
+	fmt.Printf("✅ Campaign sent to %d recipients%s\n", result.Count, batchInfo)
 	fmt.Printf("   Subject: %s\n", *subject)
 
 	// Log every email sent and update statuses
@@ -949,7 +964,7 @@ func runStorePassword(args []string) {
 	password := fs.String("password", "", "Gmail app password (omit for secure prompt)")
 	fs.Parse(args)
 
-	fmt.Println("🔐 WaterParty — Store Gmail App Password")
+	fmt.Println("🔐 CRM — Store Gmail App Password")
 	fmt.Printf("   Account: %s\n", db.GmailAddr)
 	fmt.Println("   Database: SQLCipher AES-256 encrypted")
 	fmt.Println()

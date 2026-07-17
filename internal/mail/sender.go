@@ -15,6 +15,7 @@ import (
 )
 
 const maxAttachmentSize = 20 * 1024 * 1024
+const bccBatchSize = 100
 
 type SendResult struct {
 	Success    bool   `json:"success"`
@@ -55,10 +56,10 @@ func SendEmail(to, subject, body string, fileData []byte, fileName string) *Send
 	return &SendResult{Success: true, To: to, Subject: subject, Attachment: fileName}
 }
 
-func SendBulkEmail(emails []string, subject, body string) (int, string) {
+func SendBulkEmail(emails []string, subject, body string) (int, int, string) {
 	password, err := db.LoadAppPassword()
 	if err != nil || password == "" {
-		return 0, "Gmail app password not found. Run 'crm store-password' first."
+		return 0, 0, "Gmail app password not found. Run 'crm store-password' first."
 	}
 
 	// Deduplicate using a map (case-insensitive)
@@ -82,35 +83,44 @@ func SendBulkEmail(emails []string, subject, body string) (int, string) {
 	}
 
 	if len(validEmails) == 0 {
-		return 0, "No valid email addresses"
+		return 0, 0, "No valid email addresses"
 	}
 
-	msg := buildBulkMessage(subject, body)
-	for _, e := range validEmails {
-		msg = strings.Replace(msg, "$TO$", e, 1)
+	// Batch into groups of 100 (Gmail SMTP limit)
+	batches := batchEmails(validEmails, bccBatchSize)
+	totalSent := 0
+	for i, batch := range batches {
+		msg := buildBulkMessage(subject, body)
+		for _, e := range batch {
+			msg = strings.Replace(msg, "$TO$", e, 1)
+		}
+		if err := sendViaSMTPBCC(batch, msg, password); err != nil {
+			return totalSent, len(batches), fmt.Sprintf("Batch %d/%d failed: %s", i+1, len(batches), err.Error())
+		}
+		totalSent += len(batch)
 	}
 
-	hdr := make(textproto.MIMEHeader)
-	hdr.Set("From", fmt.Sprintf("John Victor @ WaterParty <%s>", db.GmailAddr))
-	hdr.Set("To", db.GmailAddr)
-	hdr.Set("Subject", subject)
-	hdr.Set("Bcc", strings.Join(validEmails, ", "))
-
-	// Build a simple MIME message for BCC
-	fullMsg := buildBulkMessage(subject, body)
-
-	if err := sendViaSMTPBCC(validEmails, fullMsg, password); err != nil {
-		return 0, fmt.Sprintf("Failed to send email: %s", err.Error())
-	}
-
-	return len(validEmails), ""
+	return totalSent, len(batches), ""
 }
 
 type SendCLIResult struct {
-	Success  bool
-	Count    int
-	Error    string
+	Success     bool
+	Count       int
+	Batches     int
+	Error       string
 	Attachments []string
+}
+
+func batchEmails(items []string, batchSize int) [][]string {
+	var batches [][]string
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batches = append(batches, items[i:end])
+	}
+	return batches
 }
 
 func SendMailCLI(recipients []string, subject, body, fromName string, attachments []string) *SendCLIResult {
@@ -119,23 +129,66 @@ func SendMailCLI(recipients []string, subject, body, fromName string, attachment
 		return &SendCLIResult{Error: "Gmail app password not found. Run 'crm store-password' first."}
 	}
 
-	// Validate emails
+	// Deduplicate (case-insensitive) + validate
+	seen := make(map[string]bool)
 	var validEmails []string
 	for _, e := range recipients {
 		e = strings.TrimSpace(e)
-		if strings.Count(e, "@") == 1 {
-			parts := strings.Split(e, "@")
-			if len(parts[0]) > 0 && strings.Contains(parts[1], ".") && !strings.Contains(e, " ") {
-				validEmails = append(validEmails, e)
-			}
+		if e == "" || strings.Count(e, "@") != 1 {
+			continue
 		}
+		parts := strings.Split(e, "@")
+		if len(parts[0]) == 0 || !strings.Contains(parts[1], ".") || strings.Contains(e, " ") {
+			continue
+		}
+		lower := strings.ToLower(e)
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		validEmails = append(validEmails, e)
 	}
 
 	if len(validEmails) == 0 {
 		return &SendCLIResult{Error: "No valid email addresses"}
 	}
 
-	// Build MIME message
+	// Batch into groups of 100 (Gmail SMTP limit)
+	batches := batchEmails(validEmails, bccBatchSize)
+	totalSent := 0
+	numBatches := len(batches)
+
+	for i, batch := range batches {
+		// Build MIME message for this batch
+		msg := buildCLIMessage(batch, subject, body, fromName, attachments)
+		if msg == "" {
+			return &SendCLIResult{
+				Error: fmt.Sprintf("Batch %d/%d: failed to build message", i+1, len(batches)),
+				Count: totalSent,
+			}
+		}
+		if err := smtpSendBCC(batch, msg, password); err != nil {
+			return &SendCLIResult{
+				Error: fmt.Sprintf("Batch %d/%d failed: %s", i+1, len(batches), err.Error()),
+				Count: totalSent,
+			}
+		}
+		totalSent += len(batch)
+	}
+
+	return &SendCLIResult{
+		Success:     true,
+		Count:       totalSent,
+		Batches:     numBatches,
+		Attachments: attachments,
+	}
+}
+
+func buildCLIMessage(recipients []string, subject, body, fromName string, attachments []string) string {
+	if len(recipients) == 0 {
+		return ""
+	}
+
 	var b strings.Builder
 	from := fmt.Sprintf("%s <%s>", fromName, db.GmailAddr)
 	b.WriteString(fmt.Sprintf("From: %s\r\n", from))
@@ -149,20 +202,18 @@ func SendMailCLI(recipients []string, subject, body, fromName string, attachment
 		b.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary))
 		b.WriteString("\r\n")
 
-		// Text body part
 		textWriter, _ := writer.CreatePart(textproto.MIMEHeader{
 			"Content-Type": {"text/plain; charset=\"utf-8\""},
 		})
 		textWriter.Write([]byte(body))
 
-		// Attachment parts
 		for _, fpath := range attachments {
 			data, err := os.ReadFile(fpath)
 			if err != nil {
-				return &SendCLIResult{Error: fmt.Sprintf("Cannot read attachment '%s': %v", fpath, err)}
+				return ""
 			}
 			if len(data) > maxAttachmentSize {
-				return &SendCLIResult{Error: fmt.Sprintf("Attachment '%s' too large. Maximum is 20MB.", fpath)}
+				return ""
 			}
 
 			contentType := "application/octet-stream"
@@ -172,8 +223,7 @@ func SendMailCLI(recipients []string, subject, body, fromName string, attachment
 				}
 			}
 
-			// Extract just the filename
-			_, fileName := fpath, fpath
+			fileName := fpath
 			if idx := strings.LastIndexAny(fpath, "\\/"); idx >= 0 {
 				fileName = fpath[idx+1:]
 			}
@@ -193,21 +243,11 @@ func SendMailCLI(recipients []string, subject, body, fromName string, attachment
 		b.WriteString("\r\n" + body)
 	}
 
-	msg := b.String()
-
-	if err := smtpSendBCC(validEmails, msg, password); err != nil {
-		return &SendCLIResult{Error: fmt.Sprintf("Failed to send email: %s", err.Error())}
-	}
-
-	return &SendCLIResult{
-		Success:     true,
-		Count:       len(validEmails),
-		Attachments: attachments,
-	}
+	return b.String()
 }
 
 func buildPlainMessage(to, subject, body string) string {
-	msg := fmt.Sprintf("From: John Victor @ WaterParty <%s>\r\n", db.GmailAddr)
+	msg := fmt.Sprintf("From: John Victor @ CRM <%s>\r\n", db.GmailAddr)
 	msg += fmt.Sprintf("To: %s\r\n", to)
 	msg += fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
 	msg += "MIME-Version: 1.0\r\n"
@@ -218,7 +258,7 @@ func buildPlainMessage(to, subject, body string) string {
 
 func buildMultipartMessage(to, subject, body string, fileData []byte, fileName string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("From: John Victor @ WaterParty <%s>\r\n", db.GmailAddr))
+	b.WriteString(fmt.Sprintf("From: John Victor @ CRM <%s>\r\n", db.GmailAddr))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject)))
 	b.WriteString("MIME-Version: 1.0\r\n")
@@ -252,7 +292,7 @@ func buildMultipartMessage(to, subject, body string, fileData []byte, fileName s
 
 func buildBulkMessage(subject, body string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("From: John Victor @ WaterParty <%s>\r\n", db.GmailAddr))
+	b.WriteString(fmt.Sprintf("From: John Victor @ CRM <%s>\r\n", db.GmailAddr))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", db.GmailAddr))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject)))
 	b.WriteString("MIME-Version: 1.0\r\n")

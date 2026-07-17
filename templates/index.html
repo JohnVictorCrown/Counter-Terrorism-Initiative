@@ -756,7 +756,8 @@
             if (data.error) {
                 showBulkStatus('❌ ' + data.error, true);
             } else {
-                showBulkStatus(`✅ Email sent to ${data.sent} recipients`, false);
+                const batchInfo = data.batches > 1 ? ` (${data.batches} batches)` : '';
+                showBulkStatus(`✅ Email sent to ${data.sent} recipients${batchInfo}`, false);
                 sendBtn.classList.add('btn-success-temp');
                 setTimeout(() => { hideBulkCompose(); sendBtn.classList.remove('btn-success-temp'); }, 2000);
             }
